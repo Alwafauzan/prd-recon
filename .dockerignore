@@ -3,6 +3,7 @@
 !.dockerignore
 !pyproject.toml
 !README.md
+!AGENTS.md
 !src
 !src/**
 !scripts

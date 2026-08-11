@@ -7,7 +7,7 @@ ENV NEUROVI_REPO_ROOT=/repository
 
 WORKDIR /opt/neurovi
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md AGENTS.md ./
 COPY src ./src
 COPY scripts ./scripts
 COPY .codex ./.codex

@@ -18,6 +18,7 @@ dev = []
 neurovi-doc-reconciliator = "neurovi_prd_server.cli:main"
 neurovi-prd = "neurovi_prd_server.cli:main"
 neurovi-discord = "neurovi_prd_server.discord_bot:main"
+neurovi-reconciliation-agent = "neurovi_prd_server.agent_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

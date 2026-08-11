@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
+from neurovi_prd_server.agent_server import ReconciliationHTTPServer
 from neurovi_prd_server.capabilities import CapabilityError, CapabilityRunner
-from neurovi_prd_server.config import Settings
+from neurovi_prd_server.config import ConfigurationError, Settings
 from neurovi_prd_server.help_system import (
     answer_help,
     build_help_thread_name,
@@ -13,6 +21,8 @@ from neurovi_prd_server.help_system import (
     is_help_session_thread,
     strip_bot_mention,
 )
+from neurovi_prd_server.llm_client import LLMResult, OpenAICompatibleLLM
+from neurovi_prd_server.reconciliation_agent import ReconciliationAgent, SessionStore
 
 
 TOOLS_REPO = Path(__file__).resolve().parents[1]
@@ -43,6 +53,275 @@ class SettingsTests(unittest.TestCase):
                 os.environ["NEUROVI_DISCORD_RECONCILE_ROLE_IDS"] = old_reconcile
             if old_approver is not None:
                 os.environ["NEUROVI_DISCORD_APPROVER_ROLE_IDS"] = old_approver
+
+    def test_reconciliation_agent_settings_are_loaded(self) -> None:
+        values = {
+            "NEUROVI_AGENT_GATEWAY_TOKEN": "internal-secret",
+            "NEUROVI_LLM_PROVIDER": "9router",
+            "NEUROVI_LLM_BASE_URL": "https://router.example/v1",
+            "NEUROVI_LLM_API_KEY": "secret-value",
+            "NEUROVI_LLM_MODEL": "model-name",
+            "NEUROVI_LLM_REASONING_EFFORT": "high",
+        }
+        original = {key: os.environ.get(key) for key in values}
+        try:
+            os.environ.update(values)
+            settings = Settings.from_env(DOCUMENT_REPO, TOOLS_REPO)
+            settings.require_reconciliation_agent()
+            self.assertEqual(
+                settings.reconciliation_model_profile(),
+                {
+                    "provider": "9router",
+                    "model": "model-name",
+                    "reasoning_effort": "high",
+                },
+            )
+            self.assertEqual(settings.llm_base_url, "https://router.example/v1")
+            self.assertEqual(settings.llm_api_key, "secret-value")
+            self.assertNotIn("api_key", settings.reconciliation_model_profile())
+        finally:
+            for key, value in original.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_invalid_reasoning_effort_is_rejected(self) -> None:
+        original = os.environ.get("NEUROVI_LLM_REASONING_EFFORT")
+        try:
+            os.environ["NEUROVI_LLM_REASONING_EFFORT"] = "extreme"
+            with self.assertRaises(ConfigurationError):
+                Settings.from_env(DOCUMENT_REPO, TOOLS_REPO)
+        finally:
+            if original is None:
+                os.environ.pop("NEUROVI_LLM_REASONING_EFFORT", None)
+            else:
+                os.environ["NEUROVI_LLM_REASONING_EFFORT"] = original
+
+
+class LLMClientTests(unittest.TestCase):
+    def test_9router_settings_are_sent_by_the_agent_client(self) -> None:
+        captured = {}
+
+        class Response:
+            headers = {"x-request-id": "req-123"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "message": "Pertanyaan rekonsiliasi",
+                                            "status": "AWAITING_USER",
+                                        }
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                ).encode()
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["body"] = json.loads(request.data.decode())
+            captured["authorization"] = request.get_header("Authorization")
+            captured["timeout"] = timeout
+            return Response()
+
+        client = OpenAICompatibleLLM(
+            provider="9router",
+            base_url="https://router.example/v1",
+            api_key="secret-value",
+            model="model-name",
+            reasoning_effort="high",
+            timeout_seconds=77,
+        )
+        with patch("urllib.request.urlopen", fake_urlopen):
+            result = client.complete("system", "user")
+
+        self.assertEqual(captured["url"], "https://router.example/v1/chat/completions")
+        self.assertEqual(captured["body"]["model"], "model-name")
+        self.assertEqual(captured["body"]["reasoning_effort"], "high")
+        self.assertEqual(captured["authorization"], "Bearer secret-value")
+        self.assertEqual(captured["timeout"], 77)
+        self.assertEqual(result.payload["status"], "AWAITING_USER")
+        self.assertEqual(result.request_id, "req-123")
+
+
+class SessionStoreTests(unittest.TestCase):
+    def test_session_workspace_is_created_without_touching_original_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            tools = root / "tools"
+            source = repo / "source/original"
+            source.mkdir(parents=True)
+            original = source / "original.md"
+            original.write_text("immutable fact\n", encoding="utf-8")
+            inventory = repo / "reconciliation/e2e-inventory"
+            inventory.mkdir(parents=True)
+            (inventory / "inventory-manifest.json").write_text(
+                '{"schema_version": 1}\n', encoding="utf-8"
+            )
+            asset = (
+                tools
+                / ".codex/skills/neurovi-prd-reconciler/assets/review-session-template.md"
+            )
+            asset.parent.mkdir(parents=True)
+            asset.write_text("# Reconciliation Review - <E2E Code>\n", encoding="utf-8")
+
+            store = SessionStore(repo, tools)
+            session, created = store.open_or_create(
+                {"e2e_code": "E2E-ADM-01", "title": "Registration Rajal"},
+                {"discord_user_id": "123", "discord_role_ids": ["456"]},
+                {
+                    "provider": "9router",
+                    "model": "model-name",
+                    "reasoning_effort": "high",
+                },
+            )
+
+            workspace = repo / "reconciliation/workspaces/E2E-ADM-01"
+            self.assertTrue(created)
+            self.assertEqual(session["session_id"], "REC-E2E-ADM-01-001")
+            self.assertTrue((workspace / "decision-register.csv").is_file())
+            self.assertTrue((workspace / "interview-register.csv").is_file())
+            self.assertEqual(original.read_text(encoding="utf-8"), "immutable fact\n")
+            self.assertNotIn(
+                "api_key", (workspace / "session.json").read_text(encoding="utf-8")
+            )
+
+
+class ReconciliationAgentTests(unittest.TestCase):
+    def test_start_uses_repository_evidence_and_returns_a_session(self) -> None:
+        class FakeLLM:
+            def __init__(self):
+                self.user_prompt = ""
+
+            def complete(self, system_prompt, user_prompt):
+                self.user_prompt = user_prompt
+                self.assertions = "Never edit `source/original/`" in system_prompt
+                return LLMResult(
+                    {
+                        "message": "Konfirmasi boundary E2E terlebih dahulu.",
+                        "status": "AWAITING_USER",
+                        "current_question": {
+                            "why_needed": "Boundary mengendalikan scope dan handoff data.",
+                            "question": "Apakah boundary E2E ini sudah sesuai?",
+                        },
+                    },
+                    request_id="req-test",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            (repo / "catalog").mkdir(parents=True)
+            inventory = repo / "reconciliation/e2e-inventory"
+            inventory.mkdir(parents=True)
+            shutil.copy2(
+                DOCUMENT_REPO / "catalog/document-index.json",
+                repo / "catalog/document-index.json",
+            )
+            for filename in (
+                "e2e-domain-inventory.json",
+                "document-e2e-coverage.csv",
+                "inventory-manifest.json",
+            ):
+                shutil.copy2(
+                    DOCUMENT_REPO / "reconciliation/e2e-inventory" / filename,
+                    inventory / filename,
+                )
+            shutil.copy2(DOCUMENT_REPO / "AGENTS.md", repo / "AGENTS.md")
+
+            settings = Settings(
+                repo_root=repo,
+                tools_root=TOOLS_REPO,
+                discord_reconcile_role_ids=frozenset({456}),
+                discord_approver_role_ids=frozenset({789}),
+                llm_provider="9router",
+                llm_model="model-name",
+                llm_reasoning_effort="high",
+            )
+            llm = FakeLLM()
+            agent = ReconciliationAgent(settings, llm)
+            result = agent.invoke(
+                {
+                    "capability": "reconcile.start",
+                    "parameters": {"e2e": "E2E-ADM-01"},
+                    "actor": {
+                        "discord_user_id": "123",
+                        "discord_role_ids": ["456"],
+                    },
+                }
+            )
+
+            self.assertTrue(llm.assertions)
+            self.assertIn('"e2e_code": "E2E-ADM-01"', llm.user_prompt)
+            self.assertEqual(result["session_id"], "REC-E2E-ADM-01-001")
+            self.assertEqual(result["status"], "AWAITING_USER")
+            self.assertTrue(
+                (
+                    repo
+                    / "reconciliation/workspaces/E2E-ADM-01/interview-register.csv"
+                ).is_file()
+            )
+
+
+class AgentHTTPTests(unittest.TestCase):
+    def test_invoke_requires_the_shared_bearer_token(self) -> None:
+        class Agent:
+            model_profile = {
+                "provider": "9router",
+                "model": "model-name",
+                "reasoning_effort": "high",
+            }
+
+            def invoke(self, payload):
+                return {"message": payload["capability"], "status": "OK"}
+
+        server = ReconciliationHTTPServer(("127.0.0.1", 0), Agent(), "shared-secret")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{server.server_port}/invoke"
+        body = json.dumps(
+            {"capability": "reconcile.status", "parameters": {}, "actor": {}}
+        ).encode()
+        try:
+            unauthorized = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as captured:
+                urllib.request.urlopen(unauthorized, timeout=5)
+            self.assertEqual(captured.exception.code, 401)
+
+            authorized = urllib.request.Request(
+                url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer shared-secret",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(authorized, timeout=5) as response:
+                result = json.loads(response.read().decode())
+            self.assertEqual(result["message"], "reconcile.status")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 class CapabilityRunnerTests(unittest.TestCase):

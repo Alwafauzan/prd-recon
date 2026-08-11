@@ -68,6 +68,8 @@ These commands require `NEUROVI_AGENT_GATEWAY_URL` and a matching Discord role.
 
 `/reconcile control` accepts only `SKIP`, `DEFER`, or `UNKNOWN`.
 `/finish` requires `session_id`, explicit `approval:BASELINE_APPROVAL`, and a
-global `bump` of `patch`, `minor`, or `major`. It stops the reconciliation only
-after validation, commit, annotated tag creation, and atomic push all succeed.
-The gateway must keep the session open or failed when publishing cannot finish.
+global `bump` of `patch`, `minor`, or `major`. The current interview runtime
+blocks this command with `NOT_ATTEMPTED`; it does not commit or push yet. The
+target publisher may stop the reconciliation only after validation, commit,
+annotated tag creation, and atomic push all succeed. The gateway must keep the
+session open or failed when publishing cannot finish.

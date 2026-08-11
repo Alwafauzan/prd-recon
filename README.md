@@ -30,5 +30,7 @@ python3 scripts/build_structure.py validate \
   --target neurovi-prd
 ```
 
-Server Discord dan kontrak writable agent gateway dijelaskan di
-`docs/server-deployment.md`.
+Deployment menjalankan `discord-bot` read-only dan `reconciliation-agent`
+writable sebagai dua container terpisah. Agent membaca konfigurasi 9router
+langsung dari `NEUROVI_LLM_*`; Discord hanya menerima URL dan shared gateway
+token. Setup lengkap dijelaskan di `docs/server-deployment.md`.

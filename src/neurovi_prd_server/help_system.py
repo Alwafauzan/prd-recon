@@ -140,11 +140,12 @@ Validasi tidak mengubah source/original/.""",
 - /reconcile status session_id:<ID>
 - /finish session_id:<ID> approval:BASELINE_APPROVAL bump:<patch|minor|major>
 
-Command ini memerlukan agent gateway dan role yang diizinkan. /finish
-menghentikan sesi, memvalidasi perubahan, menentukan versi berikutnya, membuat
-commit dan annotated tag, lalu melakukan atomic push. Jika masih ada konten
-belum disetujui, validasi gagal, working tree tidak aman, atau push gagal,
-proses harus ditolak tanpa menandai sesi selesai.""",
+Command ini memerlukan agent gateway dan role yang diizinkan. Runtime interview
+saat ini menahan /finish dengan status NOT_ATTEMPTED dan tidak membuat commit
+atau push. Publisher final nantinya harus memvalidasi perubahan, menentukan
+versi berikutnya, membuat commit dan annotated tag, lalu melakukan atomic push.
+Jika masih ada konten belum disetujui, validasi gagal, working tree tidak aman,
+atau push gagal, proses harus ditolak tanpa menandai sesi selesai.""",
     ),
 )
 

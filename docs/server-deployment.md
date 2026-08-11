@@ -2,12 +2,14 @@
 
 ## Architecture
 
-The server package has two execution paths:
+The deployment runs two isolated services:
 
-1. Read-only commands call the existing deterministic skill scripts using
-   argument arrays, without a shell.
-2. Reconciliation commands send a structured request to an agent gateway.
-   They are disabled unless a gateway and Discord role allowlists are set.
+1. `discord-bot` mounts the document repository read-only. Read commands call
+   deterministic skill scripts, while reconciliation commands call the
+   internal agent endpoint.
+2. `reconciliation-agent` mounts the document repository writable, reads
+   `NEUROVI_LLM_*` directly, loads the reconciliation skill and policies into
+   the model context, and persists controlled interview/session artifacts.
 
 The `neurovi-prd/` submodule remains the document source truth. Graphify is not
 used as source truth, and the bot container mounts only that submodule at
@@ -58,14 +60,57 @@ mutate the repository.
 
 ```bash
 cp .env.example .env
+openssl rand -hex 32
 docker compose build
 docker compose up -d
-docker compose logs -f discord-bot
+docker compose logs -f discord-bot reconciliation-agent
 ```
 
-The image contains the Python adapter, deterministic scripts, and repository
-skills. The `neurovi-prd/` submodule is mounted at `/repository` read-only, so
-document updates do not require rebuilding the tools image.
+Put the generated value in `NEUROVI_AGENT_GATEWAY_TOKEN`. Compose uses
+`http://reconciliation-agent:8080/invoke` as the internal gateway URL. The same
+token is mapped to the bot and the agent; it is not the 9router token.
+
+The image contains the Python adapters, deterministic scripts, and repository
+skills. The `discord-bot` service mounts `neurovi-prd/` read-only. Only the
+`reconciliation-agent` service receives a writable document mount, the
+submodule Git metadata, optional host SSH agent socket, and LLM configuration.
+Set `NEUROVI_AGENT_UID` and `NEUROVI_AGENT_GID` to the host owner of the
+checkout so session artifacts can be written without running the container as
+root. Initialize the submodule before starting Compose.
+
+## Reconciliation Model Configuration
+
+Configure the model profile in `.env`:
+
+```env
+NEUROVI_LLM_PROVIDER=9router
+NEUROVI_LLM_BASE_URL=https://router.example/v1
+NEUROVI_LLM_API_KEY=<gateway-only-secret>
+NEUROVI_LLM_MODEL=<model-id>
+NEUROVI_LLM_REASONING_EFFORT=high
+NEUROVI_LLM_TIMEOUT_SECONDS=180
+```
+
+These variables belong to the reconciliation agent container. The agent reads
+the provider endpoint, API key, model, and effort directly from its own
+environment when starting. The Discord bot does not select a model and never
+includes LLM configuration or API keys in gateway requests. The agent must
+record the effective provider, model, and effort in the reconciliation audit
+trail without recording the API key. For an OpenAI-compatible 9router endpoint,
+set `NEUROVI_LLM_BASE_URL` to its API base ending in `/v1`; the runtime appends
+`/chat/completions`. A full endpoint ending in `/chat/completions` or
+`/responses` is also accepted.
+
+Docker Compose reads `.env` for variable substitution, but the `discord-bot`
+service maps only Discord and gateway variables. `NEUROVI_LLM_*` is mapped only
+into `reconciliation-agent`, so the Discord process never receives the provider
+API key.
+
+At runtime, the model does not receive arbitrary filesystem or Git write
+access. The server supplies repository evidence and selected PRD excerpts,
+requires structured JSON output, and applies only whitelisted session/register
+updates. Mechanical findings remain candidates, and model output cannot become
+baseline content without an explicit `/reconcile decide` user decision.
 
 ## Agent Gateway Contract
 
@@ -98,10 +143,10 @@ The gateway must return:
 }
 ```
 
-The gateway is responsible for loading the applicable repository skill,
-persisting the reconciliation audit trail, enforcing approval gates, and
-returning stable session IDs. It must not trust the Discord request alone for
-Git baseline creation.
+The included agent service loads the applicable repository skill, persists the
+reconciliation audit trail, independently checks Discord role IDs, and returns
+stable session IDs. It ignores a client-supplied repository path and uses only
+the repository configured inside the agent container.
 
 ### Finish and Publish Contract
 
@@ -167,6 +212,13 @@ retry and return a failure reason. The Discord bot remains read-only and never
 receives Git credentials; the dedicated gateway worker owns the writable
 checkout and remote credentials.
 
+The current container runtime implements the controlled LLM interview and
+decision workspace, but deliberately blocks `reconcile.finish` before commit,
+tag, or push. The atomic publisher remains locked until canonical artifact
+generation, `UNEXPLAINED_CHANGE` enforcement, and release-manifest generation
+are implemented. A blocked finish response reports `NOT_ATTEMPTED` and never
+pretends publication succeeded.
+
 ## Security Defaults
 
 - Discord responses are ephemeral by default.
@@ -176,6 +228,11 @@ checkout and remote credentials.
 - The document submodule volume is read-only in the Discord bot.
 - Reconciliation and approval role lists default to empty, which denies access.
 - Bot tokens and gateway tokens stay in `.env`, never in Git.
+- LLM API keys remain gateway-side and are never included in Discord payloads
+  or responses.
+- The shared agent gateway token is separate from the LLM API key.
+- The LLM can propose controlled actions but cannot directly write files or run
+  Git commands.
 - Commands use subprocess argument arrays and never invoke a shell.
 - Large PRDs and reports are returned as Discord attachments.
 

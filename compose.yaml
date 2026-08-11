@@ -2,12 +2,19 @@ services:
   discord-bot:
     build:
       context: .
-    env_file:
-      - path: .env
-        required: false
     environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
       NEUROVI_REPO_ROOT: /repository
       NEUROVI_TOOLS_ROOT: /opt/neurovi
+      NEUROVI_DISCORD_GUILD_IDS: ${NEUROVI_DISCORD_GUILD_IDS:-}
+      NEUROVI_DISCORD_EPHEMERAL: ${NEUROVI_DISCORD_EPHEMERAL:-true}
+      NEUROVI_DISCORD_TEXT_HELP_ENABLED: ${NEUROVI_DISCORD_TEXT_HELP_ENABLED:-true}
+      NEUROVI_DISCORD_RECONCILE_ROLE_IDS: ${NEUROVI_DISCORD_RECONCILE_ROLE_IDS:-}
+      NEUROVI_DISCORD_APPROVER_ROLE_IDS: ${NEUROVI_DISCORD_APPROVER_ROLE_IDS:-}
+      NEUROVI_COMMAND_TIMEOUT_SECONDS: ${NEUROVI_COMMAND_TIMEOUT_SECONDS:-120}
+      NEUROVI_AGENT_GATEWAY_URL: ${NEUROVI_AGENT_GATEWAY_URL:-http://reconciliation-agent:8080/invoke}
+      NEUROVI_AGENT_GATEWAY_TOKEN: ${NEUROVI_AGENT_GATEWAY_TOKEN:-}
+      NEUROVI_AGENT_GATEWAY_TIMEOUT_SECONDS: ${NEUROVI_AGENT_GATEWAY_TIMEOUT_SECONDS:-180}
     volumes:
       - ./neurovi-prd:/repository:ro
     read_only: true
@@ -19,6 +26,49 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "neurovi-doc-reconciliator", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  reconciliation-agent:
+    build:
+      context: .
+    command: ["neurovi-reconciliation-agent", "serve"]
+    user: "${NEUROVI_AGENT_UID:-1000}:${NEUROVI_AGENT_GID:-1000}"
+    environment:
+      NEUROVI_REPO_ROOT: /repository
+      NEUROVI_TOOLS_ROOT: /opt/neurovi
+      NEUROVI_COMMAND_TIMEOUT_SECONDS: ${NEUROVI_COMMAND_TIMEOUT_SECONDS:-120}
+      NEUROVI_AGENT_GATEWAY_TOKEN: ${NEUROVI_AGENT_GATEWAY_TOKEN:-}
+      NEUROVI_AGENT_BIND_HOST: 0.0.0.0
+      NEUROVI_AGENT_PORT: 8080
+      NEUROVI_DISCORD_RECONCILE_ROLE_IDS: ${NEUROVI_DISCORD_RECONCILE_ROLE_IDS:-}
+      NEUROVI_DISCORD_APPROVER_ROLE_IDS: ${NEUROVI_DISCORD_APPROVER_ROLE_IDS:-}
+      NEUROVI_LLM_PROVIDER: ${NEUROVI_LLM_PROVIDER:-9router}
+      NEUROVI_LLM_BASE_URL: ${NEUROVI_LLM_BASE_URL:-}
+      NEUROVI_LLM_API_KEY: ${NEUROVI_LLM_API_KEY:-}
+      NEUROVI_LLM_MODEL: ${NEUROVI_LLM_MODEL:-}
+      NEUROVI_LLM_REASONING_EFFORT: ${NEUROVI_LLM_REASONING_EFFORT:-high}
+      NEUROVI_LLM_TIMEOUT_SECONDS: ${NEUROVI_LLM_TIMEOUT_SECONDS:-180}
+      GIT_DIR: /.git/modules/neurovi-prd
+      GIT_WORK_TREE: /repository
+      SSH_AUTH_SOCK: /run/neurovi/ssh-agent
+    volumes:
+      - ./neurovi-prd:/repository
+      - ./.git/modules/neurovi-prd:/.git/modules/neurovi-prd
+      - type: bind
+        source: ${SSH_AUTH_SOCK:-/dev/null}
+        target: /run/neurovi/ssh-agent
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "neurovi-reconciliation-agent", "health"]
       interval: 30s
       timeout: 10s
       retries: 3
