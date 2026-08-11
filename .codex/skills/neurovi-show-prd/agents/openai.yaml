@@ -1,0 +1,4 @@
+interface:
+  display_name: "Neurovi Show PRD"
+  short_description: "Display immutable original Neurovi PRDs"
+  default_prompt: "Use $neurovi-show-prd to display an original PRD by document code or name."

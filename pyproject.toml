@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurovi-doc-reconciliator"
+version = "0.1.0"
+description = "Tools, skills, command service, and Discord adapter for controlled Neurovi PRD reconciliation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+discord = ["discord.py>=2.4,<3"]
+dev = []
+
+[project.scripts]
+neurovi-doc-reconciliator = "neurovi_prd_server.cli:main"
+neurovi-prd = "neurovi_prd_server.cli:main"
+neurovi-discord = "neurovi_prd_server.discord_bot:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+include-package-data = false

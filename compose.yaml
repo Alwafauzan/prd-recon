@@ -1,0 +1,25 @@
+services:
+  discord-bot:
+    build:
+      context: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NEUROVI_REPO_ROOT: /repository
+      NEUROVI_TOOLS_ROOT: /opt/neurovi
+    volumes:
+      - ./neurovi-prd:/repository:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "neurovi-doc-reconciliator", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

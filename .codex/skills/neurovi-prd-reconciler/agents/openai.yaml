@@ -1,0 +1,4 @@
+interface:
+  display_name: "Neurovi PRD Reconciler"
+  short_description: "Reconcile PRDs with controlled E2E context"
+  default_prompt: "Use $neurovi-prd-reconciler to select an E2E process and reconcile its PRDs under explicit user control."

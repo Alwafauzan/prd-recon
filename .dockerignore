@@ -1,0 +1,11 @@
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!README.md
+!src
+!src/**
+!scripts
+!scripts/**
+!.codex
+!.codex/**

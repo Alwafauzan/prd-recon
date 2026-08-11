@@ -1,0 +1,4 @@
+interface:
+  display_name: "Neurovi Gap Scanner"
+  short_description: "Scan E2E and PRD context gaps"
+  default_prompt: "Use $neurovi-gap-scanner to scan unresolved E2E and PRD context gaps."

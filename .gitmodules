@@ -1,0 +1,3 @@
+[submodule "neurovi-prd"]
+	path = neurovi-prd
+	url = ssh://git@gitlab.localtamtech.com:2552/prio27/neurovi-prd.git
