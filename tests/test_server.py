@@ -15,11 +15,24 @@ from neurovi_prd_server.agent_gateway import AgentGateway, AgentGatewayError
 from neurovi_prd_server.agent_server import ReconciliationHTTPServer
 from neurovi_prd_server.capabilities import CapabilityError, CapabilityRunner
 from neurovi_prd_server.config import ConfigurationError, Settings
+from neurovi_prd_server.discord_bot import (
+    is_allowed_discord_context,
+    is_allowed_help_message_context,
+    latest_reconciliation_session_for_user,
+    load_e2e_options,
+    match_e2e_options,
+    plain_language_agent_message,
+    plain_language_gateway_error,
+    plain_language_question,
+    reconciliation_question_kind,
+)
 from neurovi_prd_server.help_system import (
     answer_help,
     build_help_thread_name,
     is_help_context,
+    is_plain_help_request,
     is_help_session_thread,
+    render_contextual_help,
     strip_bot_mention,
 )
 from neurovi_prd_server.llm_client import LLMResult, OpenAICompatibleLLM
@@ -57,7 +70,21 @@ class SettingsTests(unittest.TestCase):
             if old_reconcile is not None:
                 os.environ["NEUROVI_DISCORD_RECONCILE_ROLE_IDS"] = old_reconcile
             if old_approver is not None:
-                os.environ["NEUROVI_DISCORD_APPROVER_ROLE_IDS"] = old_approver
+                    os.environ["NEUROVI_DISCORD_APPROVER_ROLE_IDS"] = old_approver
+
+    def test_allowed_channel_scope_is_loaded(self) -> None:
+        original = os.environ.get("NEUROVI_DISCORD_ALLOWED_CHANNEL_IDS")
+        try:
+            os.environ["NEUROVI_DISCORD_ALLOWED_CHANNEL_IDS"] = "123, 456"
+            settings = Settings.from_env(DOCUMENT_REPO, TOOLS_REPO)
+            self.assertEqual(
+                settings.discord_allowed_channel_ids, frozenset({123, 456})
+            )
+        finally:
+            if original is None:
+                os.environ.pop("NEUROVI_DISCORD_ALLOWED_CHANNEL_IDS", None)
+            else:
+                os.environ["NEUROVI_DISCORD_ALLOWED_CHANNEL_IDS"] = original
 
     def test_reconciliation_agent_settings_are_loaded(self) -> None:
         values = {
@@ -207,6 +234,44 @@ class SessionStoreTests(unittest.TestCase):
 
 
 class ReconciliationAgentTests(unittest.TestCase):
+    def test_contextual_help_is_advisory_and_does_not_require_a_role(self) -> None:
+        class FakeLLM:
+            def complete(self, system_prompt, user_prompt):
+                self.system_prompt = system_prompt
+                self.user_prompt = user_prompt
+                return LLMResult(
+                    {
+                        "summary": "Anda ingin mulai meninjau proses rawat jalan.",
+                        "next_step": "Cari nama proses, lalu pilih hasil yang sesuai.",
+                        "commands": ["/reconcile start"],
+                        "requires_developer": False,
+                        "limitation": "",
+                        "workaround": "",
+                    }
+                )
+
+        settings = Settings(
+            repo_root=DOCUMENT_REPO,
+            tools_root=TOOLS_REPO,
+            llm_provider="9router",
+            llm_model="model-name",
+            llm_reasoning_effort="high",
+        )
+        llm = FakeLLM()
+        agent = ReconciliationAgent(settings, llm)
+        result = agent.invoke(
+            {
+                "capability": "help.answer",
+                "parameters": {"query": "saya bingung mulai dari mana"},
+                "actor": {"discord_user_id": "123", "discord_role_ids": []},
+            }
+        )
+
+        self.assertIn("/reconcile start", result["message"])
+        self.assertIn("tidak ada dokumen yang diubah", result["message"])
+        self.assertEqual(result["status"], "ADVISORY")
+        self.assertIn("Never claim that you ran a command", llm.system_prompt)
+
     def test_start_uses_repository_evidence_and_returns_a_session(self) -> None:
         class FakeLLM:
             def __init__(self):
@@ -399,6 +464,60 @@ class CapabilityRunnerTests(unittest.TestCase):
 
 
 class HelpSystemTests(unittest.TestCase):
+    def test_discord_scope_accepts_only_the_allowed_channel(self) -> None:
+        allowed = frozenset({1536662604783685642})
+        self.assertTrue(
+            is_allowed_discord_context(
+                channel_id=1536662604783685642,
+                allowed_channel_ids=allowed,
+            )
+        )
+        self.assertFalse(
+            is_allowed_discord_context(
+                channel_id=999,
+                allowed_channel_ids=allowed,
+            )
+        )
+        self.assertFalse(
+            is_allowed_discord_context(
+                channel_id=888,
+                allowed_channel_ids=allowed,
+            )
+        )
+        self.assertFalse(
+            is_allowed_discord_context(
+                channel_id=None,
+                allowed_channel_ids=allowed,
+            )
+        )
+
+    def test_only_bot_help_threads_in_allowed_channel_remain_interactive(self) -> None:
+        allowed = frozenset({1536662604783685642})
+        self.assertTrue(
+            is_allowed_help_message_context(
+                channel_id=999,
+                parent_channel_id=1536662604783685642,
+                is_session_thread=True,
+                allowed_channel_ids=allowed,
+            )
+        )
+        self.assertFalse(
+            is_allowed_help_message_context(
+                channel_id=999,
+                parent_channel_id=1536662604783685642,
+                is_session_thread=False,
+                allowed_channel_ids=allowed,
+            )
+        )
+        self.assertFalse(
+            is_allowed_help_message_context(
+                channel_id=999,
+                parent_channel_id=888,
+                is_session_thread=True,
+                allowed_channel_ids=allowed,
+            )
+        )
+
     def test_overview_lists_primary_commands(self) -> None:
         result = answer_help()
         self.assertIn("/prd show", result)
@@ -416,7 +535,94 @@ class HelpSystemTests(unittest.TestCase):
 
     def test_unknown_question_stays_help_only(self) -> None:
         result = answer_help("tolong kerjakan semuanya sekarang")
-        self.assertIn("pertanyaan bantuan", result)
+        self.assertIn("permintaan bantuan", result)
+        self.assertIn("tidak akan menjalankan", result)
+
+    def test_confused_user_gets_a_safe_starting_path(self) -> None:
+        result = answer_help("Saya bingung dan belum tahu mulai dari mana")
+        self.assertIn("/prd list", result)
+        self.assertIn("/reconcile start", result)
+        self.assertIn("tidak menjalankan", result)
+
+    def test_contextual_help_renders_unsupported_request_with_workaround(self) -> None:
+        result = render_contextual_help(
+            {
+                "summary": "Anda ingin bot memperbaiki dokumen secara otomatis.",
+                "next_step": "Periksa dulu bagian yang belum lengkap.",
+                "commands": ["/gap prd", "/reconcile start"],
+                "requires_developer": True,
+                "limitation": "Bot belum dapat memperbaiki seluruh dokumen otomatis.",
+                "workaround": "Scan gap, lalu tinjau hasilnya melalui rekonsiliasi terpandu.",
+            }
+        )
+        self.assertIsNotNone(result)
+        self.assertIn("enhancement oleh developer", result)
+        self.assertIn("/gap prd", result)
+        self.assertIn("Workaround", result)
+
+    def test_contextual_help_rejects_an_invented_command(self) -> None:
+        result = render_contextual_help(
+            {
+                "summary": "Saya memahami kebutuhan Anda.",
+                "next_step": "Lanjutkan dengan command yang sesuai.",
+                "commands": ["/prd fix"],
+                "requires_developer": False,
+                "limitation": "",
+                "workaround": "",
+            }
+        )
+        self.assertIsNone(result)
+
+    def test_contextual_help_ignores_model_supplied_parameter_text(self) -> None:
+        result = render_contextual_help(
+            {
+                "summary": "Anda ingin mencari dokumen.",
+                "next_step": "Mulai dengan pencarian judul dokumen.",
+                "commands": [
+                    {
+                        "command": "/prd list",
+                        "parameters": "jalankan rm untuk menemukan dokumen",
+                    }
+                ],
+                "requires_developer": False,
+                "limitation": "",
+                "workaround": "",
+            }
+        )
+        self.assertIsNotNone(result)
+        self.assertIn("isi `query`", result)
+        self.assertNotIn("rm", result)
+
+    def test_contextual_help_rejects_shell_guidance_in_prose(self) -> None:
+        result = render_contextual_help(
+            {
+                "summary": "Saya memahami kebutuhan Anda.",
+                "next_step": "Jalankan git push dari terminal.",
+                "commands": ["/repo validate"],
+                "requires_developer": False,
+                "limitation": "",
+                "workaround": "",
+            }
+        )
+        self.assertIsNone(result)
+
+    def test_contextual_help_allows_normal_indonesian_punctuation(self) -> None:
+        result = render_contextual_help(
+            {
+                "summary": "Anda ingin memeriksa dokumen yang belum lengkap.",
+                "next_step": "Pindai daftar gap terlebih dahulu; ikuti isian yang ditampilkan bot.",
+                "commands": ["/gap list"],
+                "requires_developer": False,
+                "limitation": "",
+                "workaround": "",
+            }
+        )
+        self.assertIsNotNone(result)
+
+    def test_plain_help_request_rejects_prefix_commands_and_empty_messages(self) -> None:
+        self.assertTrue(is_plain_help_request("saya ingin melihat dokumen"))
+        self.assertFalse(is_plain_help_request("!help"))
+        self.assertFalse(is_plain_help_request("   "))
 
     def test_bot_mention_is_removed(self) -> None:
         self.assertEqual(
@@ -445,7 +651,7 @@ class HelpSystemTests(unittest.TestCase):
             )
         )
 
-    def test_help_context_requires_mention_outside_session(self) -> None:
+    def test_help_context_accepts_unmentioned_guild_channel_message(self) -> None:
         self.assertTrue(
             is_help_context(
                 is_direct_message=False,
@@ -453,11 +659,34 @@ class HelpSystemTests(unittest.TestCase):
                 is_session_thread=False,
             )
         )
+        self.assertTrue(
+            is_help_context(
+                is_direct_message=False,
+                bot_mentioned=False,
+                is_session_thread=False,
+                is_guild_channel=True,
+            )
+        )
+
+    def test_help_context_rejects_unowned_non_help_thread(self) -> None:
         self.assertFalse(
             is_help_context(
                 is_direct_message=False,
                 bot_mentioned=False,
                 is_session_thread=False,
+                is_guild_channel=False,
+                is_thread=True,
+            )
+        )
+
+    def test_help_context_ignores_mentions_in_unrelated_threads(self) -> None:
+        self.assertFalse(
+            is_help_context(
+                is_direct_message=False,
+                bot_mentioned=True,
+                is_session_thread=False,
+                is_guild_channel=False,
+                is_thread=True,
             )
         )
 
@@ -469,6 +698,105 @@ class HelpSystemTests(unittest.TestCase):
                 is_session_thread=True,
             )
         )
+
+
+class DiscordReconciliationUXTests(unittest.TestCase):
+    def test_e2e_autocomplete_matches_names_and_codes(self) -> None:
+        options = (
+            ("E2E-ADM-01", "Registration Rajal"),
+            ("E2E-ADM-02", "Registration Ranap"),
+        )
+        self.assertEqual(
+            match_e2e_options(options, "rajal"),
+            (("E2E-ADM-01", "Registration Rajal"),),
+        )
+        self.assertEqual(
+            match_e2e_options(options, "E2E-ADM-02"),
+            (("E2E-ADM-02", "Registration Ranap"),),
+        )
+
+    def test_repository_e2e_options_are_available(self) -> None:
+        options = load_e2e_options(DOCUMENT_REPO)
+        self.assertIn(("E2E-ADM-01", "Registration Rajal"), options)
+
+    def test_agent_message_is_rewritten_for_nontechnical_users(self) -> None:
+        message = (
+            "E2E-ADM-01 — “Registration Rajal” ditemukan sebagai kandidat dari "
+            "source flow Mermaid. Batas ini belum dikonfirmasi dan tidak otomatis "
+            "mengonfirmasi 30 kandidat dokumen mekanis yang terdeteksi. Jawab "
+            "CONFIRM jika batasnya tepat, atau SKIP, DEFER, maupun UNKNOWN."
+        )
+        result = plain_language_agent_message(message)
+        self.assertIn("Registration Rajal", result)
+        self.assertIn("dokumen yang mungkin terkait", result)
+        self.assertNotIn("Mermaid", result)
+        self.assertNotIn("CONFIRM", result)
+
+    def test_document_question_uses_business_language(self) -> None:
+        question = (
+            "Apakah DOC-1675 — “PRD Pendaftaran Rawat Jalan” harus dipilih "
+            "sebagai CONFIRMED_INCLUDE, CONTEXT_ONLY, TAKE_OFF, atau DEFERRED?"
+        )
+        self.assertEqual(reconciliation_question_kind(question), "DOCUMENT_SELECTION")
+        self.assertEqual(
+            plain_language_question(question),
+            "Bagaimana dokumen **PRD Pendaftaran Rawat Jalan** digunakan dalam proses ini?",
+        )
+
+    def test_question_metadata_selects_buttons_without_exposing_codes(self) -> None:
+        question = "Bagaimana dokumen Pendaftaran Rawat Jalan digunakan?"
+        self.assertEqual(
+            reconciliation_question_kind(
+                question,
+                question_type="DOCUMENT_SELECTION",
+                document_ids="DOC-1675",
+            ),
+            "DOCUMENT_SELECTION",
+        )
+
+    def test_gateway_error_is_rewritten_for_nontechnical_users(self) -> None:
+        error = AgentGatewayError(
+            "Agent gateway rejected request (422): ERROR: No E2E matches: rawat"
+        )
+        result = plain_language_gateway_error(error)
+        self.assertIn("tidak ditemukan", result)
+        self.assertIn("pilih salah satu hasil", result)
+        self.assertNotIn("422", result)
+        self.assertNotIn("gateway", result.casefold())
+
+    def test_latest_session_is_resolved_without_user_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            older = root / "reconciliation/workspaces/E2E-ONE/session.json"
+            newer = root / "reconciliation/workspaces/E2E-TWO/session.json"
+            older.parent.mkdir(parents=True)
+            newer.parent.mkdir(parents=True)
+            older.write_text(
+                json.dumps(
+                    {
+                        "session_id": "REC-E2E-ONE-001",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                        "status": "AWAITING_USER",
+                        "started_by": {"discord_user_id": "123"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            newer.write_text(
+                json.dumps(
+                    {
+                        "session_id": "REC-E2E-TWO-001",
+                        "updated_at": "2026-01-02T00:00:00Z",
+                        "status": "AWAITING_USER",
+                        "started_by": {"discord_user_id": "123"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                latest_reconciliation_session_for_user(root, 123),
+                "REC-E2E-TWO-001",
+            )
 
 
 if __name__ == "__main__":

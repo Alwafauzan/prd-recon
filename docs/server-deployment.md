@@ -45,16 +45,28 @@ List and execute capabilities locally:
 4. Copy `.env.example` to `.env`.
 5. Set `DISCORD_TOKEN`.
 6. Optionally set one or more guild IDs for immediate development sync.
-7. Enable the Message Content privileged intent for natural-language help.
-8. Set role IDs before enabling reconciliation or `/finish`.
+7. Set `NEUROVI_DISCORD_ALLOWED_CHANNEL_IDS` to the comma-separated channel IDs
+   where the bot is allowed to respond.
+8. Enable the Message Content privileged intent for natural-language help.
+9. Set role IDs before enabling reconciliation or `/finish`.
 
-In a server channel, the bot ignores ordinary messages. Mentioning the bot
-creates a public thread attached to the triggering message and sends the help
-answer there. Follow-up text in that bot-owned thread continues the session
-without another tag. Direct messages are answered directly. A mention inside
-an existing thread cannot create a nested thread, so the bot directs the user
-to invoke it from the parent channel. Plain messages never execute tools or
-mutate the repository.
+In an allowed channel, every ordinary user question creates a public help
+thread attached to the triggering message; a bot mention is not required.
+Follow-up text remains active only in a bot-owned `neurovi-help-*` thread whose
+parent is an allowed channel. Other threads are ignored even when their parent
+is allowed. Everywhere else the bot ignores messages, mentions, and direct
+messages. Slash commands and reconciliation components outside the allowed
+channel receive no bot response and execute no capability.
+
+The contextual advisor runs through the internal gateway but is separated from
+reconciliation capabilities: it requires no reconciliation role, receives only
+the user's question and actor metadata, and cannot read arbitrary files, run
+commands, or write repository state. Its output is validated against the fixed
+Discord command catalog. If the request needs an unsupported capability, the
+answer tells the user to request a developer enhancement and gives the nearest
+workaround using current slash commands. When the advisor is unavailable, the
+bot falls back to deterministic topic help. Plain messages never execute tools
+or mutate the repository.
 
 ## Run with Docker Compose
 
@@ -222,9 +234,10 @@ pretends publication succeeded.
 ## Security Defaults
 
 - Discord responses are ephemeral by default.
-- Server-channel text requires a bot mention; follow-ups are scoped to the
-  bot-created help thread.
-- Natural-language text is help-only and cannot execute capabilities.
+- The bot accepts slash commands and reconciliation components only in an
+  allowed channel. Only bot-owned help threads from that channel accept text.
+- Natural-language text is advisory only and cannot execute capabilities.
+- Contextual help output is restricted to the installed slash-command catalog.
 - The document submodule volume is read-only in the Discord bot.
 - Reconciliation and approval role lists default to empty, which denies access.
 - Bot tokens and gateway tokens stay in `.env`, never in Git.

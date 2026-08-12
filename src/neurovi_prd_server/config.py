@@ -56,6 +56,7 @@ class Settings:
     command_timeout_seconds: int = 120
     discord_token: str | None = None
     discord_guild_ids: frozenset[int] = frozenset()
+    discord_allowed_channel_ids: frozenset[int] = frozenset()
     discord_ephemeral: bool = True
     discord_text_help_enabled: bool = True
     discord_reconcile_role_ids: frozenset[int] = frozenset()
@@ -103,6 +104,9 @@ class Settings:
             command_timeout_seconds=command_timeout,
             discord_token=os.environ.get("DISCORD_TOKEN"),
             discord_guild_ids=_parse_ids(os.environ.get("NEUROVI_DISCORD_GUILD_IDS")),
+            discord_allowed_channel_ids=_parse_ids(
+                os.environ.get("NEUROVI_DISCORD_ALLOWED_CHANNEL_IDS")
+            ),
             discord_ephemeral=_parse_bool(
                 os.environ.get("NEUROVI_DISCORD_EPHEMERAL"), True
             ),

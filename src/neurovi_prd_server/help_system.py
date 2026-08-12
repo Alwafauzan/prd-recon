@@ -3,9 +3,83 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 
 HELP_SESSION_THREAD_PREFIX = "neurovi-help-"
+
+COMMAND_GUIDANCE = {
+    "/help": "opsional isi `topic` dengan prd, e2e, gap, inventory, version, repo, atau reconcile",
+    "/prd list": "isi `query` dengan kata yang Anda ingat; `limit` boleh dibiarkan default",
+    "/prd show": "isi `document` dengan DOC-ID atau nama dokumen; `section` hanya jika ingin bagian tertentu",
+    "/e2e list": "isi `query` dengan nama proses; filter lain boleh dikosongkan",
+    "/e2e show": "isi `e2e_code_or_name` dengan kode atau nama proses",
+    "/gap list": "tidak memerlukan parameter",
+    "/gap e2e": "isi `e2e_code_or_name` dengan kode atau nama proses",
+    "/gap prd": "isi `document` dengan DOC-ID atau nama dokumen",
+    "/inventory find-prd": "isi `query` dengan kode, judul, atau kata kunci dokumen",
+    "/inventory scan-format": "isi `document` dengan DOC-ID dokumen",
+    "/version list": "tidak memerlukan parameter",
+    "/version compare": "isi `from_version` dan `to_version` dengan dua versi yang ingin dibandingkan",
+    "/repo health": "tidak memerlukan parameter",
+    "/repo validate": "tidak memerlukan parameter",
+    "/repo commands": "tidak memerlukan parameter",
+    "/reconcile start": "ketik sebagian nama proses pada `e2e_code_or_name`, lalu pilih hasil yang muncul",
+    "/reconcile continue": "tidak memerlukan parameter; membuka sesi aktif terakhir milik Anda",
+    "/reconcile answer": "fallback admin: isi `session_id` dan jawaban bebas pada `answer`",
+    "/reconcile control": "fallback admin: isi `session_id`, lalu pilih SKIP, DEFER, atau UNKNOWN pada `action`",
+    "/reconcile add-reference": "fallback admin: isi `session_id` dan lokasi referensi pada `reference`",
+    "/reconcile decide": "fallback admin: isi `session_id` dan keputusan pada `decision`",
+    "/reconcile status": "fallback admin: isi `session_id`",
+    "/finish": "isi `session_id`, pilih `approval` BASELINE_APPROVAL, dan pilih `bump`; publikasi saat ini dapat ditolak sebagai belum tersedia",
+}
+KNOWN_SLASH_COMMANDS = frozenset(COMMAND_GUIDANCE)
+
+CONTEXTUAL_HELP_SYSTEM_PROMPT = """You are the read-only help advisor for the
+Neurovi PRD Discord bot. Answer in simple Indonesian for nontechnical hospital
+staff. Return exactly one JSON object using the response contract below.
+
+Safety and behavior:
+- A normal chat message is only a question. Never claim that you ran a command,
+  changed a document, resolved a gap, started a session, committed, or pushed.
+- Recommend only slash commands from the catalog below. Never invent a command.
+- First explain what the user can do now, then give the exact command and the
+  minimum parameter they need to fill.
+- If the requested result is not supported by the catalog, explicitly say that
+  the bot cannot do it yet and that a developer enhancement is required. Do not
+  pretend to resolve it. Give the closest practical workaround using only the
+  available commands.
+- If the request is ambiguous, help the user start with a safe discovery command
+  instead of asking for technical IDs they are unlikely to know.
+- Keep the answer under 1,500 characters and use short paragraphs or bullets.
+- Put slash commands only in the `commands` array, never inside prose fields.
+- The runtime supplies parameter instructions from its trusted catalog. Do not
+  invent or return parameter names or command syntax.
+
+Available command catalog:
+- /prd list, /prd show: find or read immutable original PRDs.
+- /e2e list, /e2e show: find or inspect E2E process inventory and source flows.
+- /gap list, /gap e2e, /gap prd: scan diagnostic context gaps without changing documents.
+- /inventory find-prd, /inventory scan-format: search coverage or inspect PRD heading format.
+- /version list, /version compare: inspect global repository versions.
+- /repo health, /repo validate, /repo commands: inspect service/repository health and capabilities.
+- /reconcile start, /reconcile continue: start or resume the guided controlled review.
+- /reconcile answer, /reconcile control, /reconcile add-reference,
+  /reconcile decide, /reconcile status: administrative reconciliation fallbacks.
+- /finish: request approved global publication; current runtime may report that
+  publication is not implemented rather than commit or push.
+- /help: show this command guidance.
+
+Response contract:
+{
+  "summary": "one short sentence showing you understand the user's need",
+  "next_step": "what the user can safely do now, without slash commands",
+  "commands": ["one exact command from the catalog"],
+  "requires_developer": false,
+  "limitation": "required when requires_developer is true",
+  "workaround": "nearest practical workaround, without slash commands"
+}
+"""
 
 
 @dataclass(frozen=True)
@@ -15,12 +89,13 @@ class HelpTopic:
     content: str
 
 
-OVERVIEW = """# Neurovi PRD Bot Help
+OVERVIEW = """# Bantuan Neurovi PRD
 
-Di server Discord, tag bot untuk memulai sesi bantuan baru. Bot membuat thread
-secara otomatis dan memperlakukan pesan lanjutan di thread itu sebagai
-pertanyaan bantuan, bukan perintah untuk membaca atau mengubah repository.
-Direct message dilayani tanpa membuat thread.
+Tulis pertanyaan atau kebutuhan Anda dengan bahasa sehari-hari di channel.
+Bot membuat thread bantuan secara otomatis, lalu mengarahkan Anda ke slash
+command yang tepat. Pesan biasa hanya meminta panduan: bot tidak menjalankan
+command dan tidak mengubah dokumen dari chat tersebut. Direct message dilayani
+tanpa membuat thread.
 
 Command utama:
 - /prd list, /prd show - mencari dan menampilkan PRD original.
@@ -32,9 +107,28 @@ Command utama:
 - /reconcile ... - rekonsiliasi terkontrol melalui agent gateway.
 - /finish - menutup sesi dan menerbitkan versi global yang disetujui.
 
-Gunakan /help topic:<prd|e2e|gap|inventory|version|repo|reconcile>.
-Anda juga dapat bertanya: "bagaimana melihat PRD original?" atau
-"command apa untuk scan gap E2E?"."""
+Jika belum tahu harus mulai dari mana, jelaskan tujuan Anda, misalnya:
+"Saya ingin melihat dokumen pendaftaran rawat jalan" atau
+"Saya ingin memeriksa bagian proses yang belum jelas".
+
+Gunakan /help topic:<prd|e2e|gap|inventory|version|repo|reconcile> untuk
+melihat satu kelompok command."""
+
+
+GETTING_STARTED = """# Mulai dari sini
+
+Tidak perlu mengetahui kode dokumen atau kode E2E terlebih dahulu.
+
+1. Jika ingin mencari dokumen, jalankan `/prd list` dan isi `query` dengan nama
+   atau kata yang Anda ingat.
+2. Jika ingin mencari proses, jalankan `/e2e list` dan isi `query` dengan nama
+   proses.
+3. Jika ingin mulai peninjauan terpandu, jalankan `/reconcile start`, ketik
+   sebagian nama proses, lalu pilih hasil yang muncul.
+4. Jika sebelumnya sudah mulai, jalankan `/reconcile continue`.
+
+Pesan chat ini tidak menjalankan langkah tersebut. Pilih command di atas agar
+bot dapat membaca atau memproses permintaan Anda secara aman."""
 
 
 TOPICS = (
@@ -132,7 +226,16 @@ Validasi tidak mengubah source/original/.""",
         ),
         """# Bantuan Rekonsiliasi
 
-- /reconcile start e2e_code_or_name:<E2E>
+Untuk user operasional:
+
+- Jalankan /reconcile start, ketik sebagian nama proses, lalu pilih dari daftar.
+- Ikuti kartu panduan dan gunakan tombol yang tersedia.
+- Gunakan /reconcile continue untuk membuka kembali sesi terakhir Anda.
+
+Tidak perlu mengingat session ID atau kode keputusan.
+
+Fallback administrator:
+
 - /reconcile answer session_id:<ID> answer:<jawaban>
 - /reconcile control session_id:<ID> action:<SKIP|DEFER|UNKNOWN>
 - /reconcile add-reference session_id:<ID> reference:<path atau referensi>
@@ -141,7 +244,10 @@ Validasi tidak mengubah source/original/.""",
 - /finish session_id:<ID> approval:BASELINE_APPROVAL bump:<patch|minor|major>
 
 Command ini memerlukan agent gateway dan role yang diizinkan. Runtime interview
-saat ini menahan /finish dengan status NOT_ATTEMPTED dan tidak membuat commit
+saat ini menyediakan daftar proses, tombol pilihan, dan formulir jawaban. User
+tidak perlu menyalin session ID atau mengetik kode keputusan; command answer,
+control, dan decide tetap tersedia sebagai fallback administrator. `/finish`
+saat ini ditahan dengan status NOT_ATTEMPTED dan tidak membuat commit
 atau push. Publisher final nantinya harus memvalidasi perubahan, menentukan
 versi berikutnya, membuat commit dan annotated tag, lalu melakukan atomic push.
 Jika masih ada konten belum disetujui, validasi gagal, working tree tidak aman,
@@ -159,6 +265,18 @@ def answer_help(query: str | None = None) -> str:
     if not query or not query.strip():
         return OVERVIEW
     normalized = normalize(query)
+    if any(
+        phrase in normalized
+        for phrase in (
+            "mulai dari mana",
+            "harus mulai",
+            "cara mulai",
+            "saya bingung",
+            "tidak tahu mulai",
+            "belum tahu",
+        )
+    ):
+        return GETTING_STARTED
     for topic in TOPICS:
         if normalized == topic.key:
             return topic.content
@@ -171,9 +289,90 @@ def answer_help(query: str | None = None) -> str:
         scored.sort(key=lambda item: (-item[0], item[1]))
         return scored[0][2]
     return (
-        "Saya memperlakukan pesan ini sebagai pertanyaan bantuan, tetapi topiknya "
-        "belum dikenali.\n\n" + OVERVIEW
+        "Saya memahami ini sebagai permintaan bantuan, tetapi belum ada command "
+        "yang dapat saya pastikan cocok. Pesan chat tidak akan menjalankan atau "
+        "mengubah apa pun.\n\nGunakan `/help` untuk melihat kemampuan yang tersedia, "
+        "atau jelaskan objek dan tujuan Anda, misalnya: \"cari PRD pendaftaran\", "
+        "\"lihat alur rawat jalan\", atau \"periksa gap proses\". Jika kebutuhan "
+        "Anda tidak memiliki command, bot akan menjelaskan workaround yang tersedia "
+        "dan menyarankan enhancement kepada developer."
     )
+
+
+def _plain_help_field(value: Any, *, required: bool = False) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    shell_command = re.search(
+        r"(?:^|[\s:])(?:bash|chmod|chown|cp|curl|docker|git|make|mv|npm|pip|"
+        r"python|rm|sh|sudo|systemctl|wget)(?=\s+(?:--?\w|[^,.!?]+(?:\s|$)))",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    forbidden = re.search(r"[`@&|$<>]", cleaned) or shell_command
+    if (required and not cleaned) or len(cleaned) > 700 or "/" in cleaned or forbidden:
+        return None
+    return cleaned
+
+
+def _normalize_model_command(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value.strip().casefold()
+    if isinstance(value, Mapping):
+        command = value.get("command")
+        if isinstance(command, str):
+            return command.strip().casefold()
+    return None
+
+
+def render_contextual_help(value: Mapping[str, Any]) -> str | None:
+    summary = _plain_help_field(value.get("summary"), required=True)
+    next_step = _plain_help_field(value.get("next_step"), required=True)
+    workaround = _plain_help_field(value.get("workaround"))
+    limitation = _plain_help_field(value.get("limitation"))
+    requires_developer = value.get("requires_developer")
+    commands = value.get("commands")
+    if summary is None or next_step is None or not isinstance(commands, list):
+        return None
+    if not isinstance(requires_developer, bool) or len(commands) > 3:
+        return None
+
+    command_lines = []
+    for item in commands:
+        command = _normalize_model_command(item)
+        if command not in KNOWN_SLASH_COMMANDS:
+            return None
+        command_lines.append(f"- `{command}` — {COMMAND_GUIDANCE[command]}")
+
+    sections = [summary, f"**Yang dapat dilakukan sekarang**\n{next_step}"]
+    if command_lines:
+        sections.append("**Gunakan command**\n" + "\n".join(command_lines))
+    if requires_developer:
+        if not limitation or not workaround:
+            return None
+        sections.append(
+            "**Batas kemampuan saat ini**\n"
+            + limitation
+            + " Kebutuhan ini memerlukan enhancement oleh developer; bot tidak "
+            "akan berpura-pura sudah menyelesaikannya."
+        )
+        sections.append(f"**Workaround**\n{workaround}")
+    elif workaround:
+        sections.append(f"**Langkah alternatif**\n{workaround}")
+    sections.append(
+        "Pesan bantuan ini hanya memberi panduan. Belum ada command yang "
+        "dijalankan dan tidak ada dokumen yang diubah."
+    )
+    rendered = "\n\n".join(sections)
+    return rendered if len(rendered) <= 1900 else None
+
+
+def is_plain_help_request(content: str) -> bool:
+    cleaned = content.strip()
+    if not cleaned:
+        return False
+    # Prefix commands are not part of the natural-language help path.
+    return not cleaned.startswith("!")
 
 
 def strip_bot_mention(content: str, bot_user_id: int) -> str:
@@ -202,5 +401,9 @@ def is_help_context(
     is_direct_message: bool,
     bot_mentioned: bool,
     is_session_thread: bool,
+    is_guild_channel: bool = False,
+    is_thread: bool = False,
 ) -> bool:
-    return is_direct_message or bot_mentioned or is_session_thread
+    if is_thread and not is_session_thread:
+        return False
+    return is_direct_message or bot_mentioned or is_session_thread or is_guild_channel

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -13,7 +14,14 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Protocol
 
 from neurovi_prd_server.config import Settings
+from neurovi_prd_server.help_system import (
+    CONTEXTUAL_HELP_SYSTEM_PROMPT,
+    render_contextual_help,
+)
 from neurovi_prd_server.llm_client import LLMError, LLMResult
+
+
+LOGGER = logging.getLogger("neurovi_prd_server.reconciliation")
 
 
 class ReconciliationAgentError(RuntimeError):
@@ -37,6 +45,8 @@ RECONCILIATION_CAPABILITIES = frozenset(
         "reconcile.finish",
     }
 )
+HELP_CAPABILITY = "help.answer"
+AGENT_CAPABILITIES = RECONCILIATION_CAPABILITIES | {HELP_CAPABILITY}
 
 SESSION_TERMINAL_STATUSES = frozenset({"FINISHED", "PUBLISHED"})
 INTERVIEW_CONTROL_STATUSES = {
@@ -351,6 +361,7 @@ class SessionStore:
             "flow_or_handoff": str(value.get("flow_or_handoff", "")),
             "question": question,
             "why_needed": str(value.get("why_needed", "")),
+            "question_type": str(value.get("question_type", "")).upper(),
         }
         if not any(row.get("question_id") == question_id for row in rows):
             rows.append(
@@ -711,12 +722,14 @@ class ReconciliationAgent:
 
     def invoke(self, request: Mapping[str, Any]) -> dict[str, Any]:
         capability = str(request.get("capability", "")).strip()
-        if capability not in RECONCILIATION_CAPABILITIES:
+        if capability not in AGENT_CAPABILITIES:
             raise ReconciliationAgentError(f"Unknown agent capability: {capability}")
         parameters = request.get("parameters", {})
         actor = request.get("actor", {})
         if not isinstance(parameters, Mapping) or not isinstance(actor, Mapping):
             raise ReconciliationAgentError("parameters and actor must be objects.")
+        if capability == HELP_CAPABILITY:
+            return self._answer_help(parameters)
         self._authorize(capability, actor)
 
         if capability == "reconcile.start":
@@ -729,6 +742,41 @@ class ReconciliationAgent:
             if capability == "reconcile.finish":
                 return self._finish_blocked(workspace, session, parameters, actor)
             return self._continue(capability, workspace, session, parameters, actor)
+
+    def _answer_help(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
+        query = self._required(parameters, "query")
+        if len(query) > 4000:
+            raise ReconciliationAgentError("Help question is too long.")
+        prompt = json.dumps(
+            {
+                "user_question": query,
+                "instruction": (
+                    "Classify the need against the catalog and return the exact "
+                    "JSON response contract from the system prompt."
+                ),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        try:
+            result = self.llm.complete(CONTEXTUAL_HELP_SYSTEM_PROMPT, prompt)
+        except LLMError as error:
+            raise ReconciliationAgentError(str(error), 502) from error
+        rendered = render_contextual_help(result.payload)
+        if rendered is None:
+            LOGGER.warning(
+                "Contextual help model output failed validation: %s",
+                json.dumps(result.payload, ensure_ascii=False)[:3000],
+            )
+            raise ReconciliationAgentError(
+                "Help advisor returned an unsafe or invalid command recommendation.",
+                502,
+            )
+        return {
+            "message": rendered,
+            "status": "ADVISORY",
+            "result": {"model_profile": self.model_profile},
+        }
 
     def _start(
         self, parameters: Mapping[str, Any], actor: Mapping[str, Any]
@@ -858,15 +906,21 @@ class ReconciliationAgent:
                 workspace
             ),
             "response_contract": {
-                "message": "Required Indonesian user-facing response. Ask one focused question at a time.",
+                "message": (
+                    "Required plain Indonesian response for a nontechnical hospital "
+                    "user. Use at most 3 short sentences, explain what was found and "
+                    "what the user must decide, and do not instruct the user to type "
+                    "status codes, session IDs, or slash commands."
+                ),
                 "status": "AWAITING_USER, IN_PROGRESS, READY_FOR_BASELINE_REVIEW, or BLOCKED",
                 "current_question": {
                     "question_id": "Optional stable ID",
                     "defect_ids": ["optional"],
                     "document_ids": ["optional"],
                     "flow_or_handoff": "optional",
-                    "why_needed": "why flow or data integrity depends on this answer",
-                    "question": "one neutral question",
+                    "why_needed": "short plain Indonesian reason without internal codes",
+                    "question": "one neutral plain Indonesian question without internal codes",
+                    "question_type": "CONFIRMATION, DOCUMENT_SELECTION, or OPEN_ANSWER",
                 },
                 "decision_type": "Only for USER_DECISION and only one allowed policy type",
                 "decision_rationale": "Evidence-based explanation, never an invented fact",
@@ -1104,6 +1158,10 @@ class ReconciliationAgent:
 - Never claim that a document, baseline, commit, tag, or push changed; this model has no direct filesystem or Git write authority.
 - `actions` are allowed only when the current operation is `USER_DECISION`, and every action must be directly supported by the exact user decision.
 - Ask one focused question at a time and always allow SKIP, DEFER, or UNKNOWN.
+- Write for nontechnical hospital staff using short, familiar Indonesian words.
+- Never tell the user to type internal values such as CONFIRM, CONFIRMED_INCLUDE, CONTEXT_ONLY, TAKE_OFF, SKIP, DEFER, UNKNOWN, PRIMARY_SCOPE, a session ID, or a slash command. The Discord interface provides those controls.
+- Keep each user-facing message to at most three short sentences: what was found, why it matters, and what decision is needed.
+- Replace technical terms in user-facing text: source flow Mermaid -> diagram alur; boundary -> cakupan proses; mechanical candidate -> dokumen yang mungkin terkait; baseline -> versi yang disetujui.
 - Respond in Indonesian unless source wording must be quoted exactly.
 """.strip()
         )

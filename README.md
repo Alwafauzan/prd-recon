@@ -34,3 +34,17 @@ Deployment menjalankan `discord-bot` read-only dan `reconciliation-agent`
 writable sebagai dua container terpisah. Agent membaca konfigurasi 9router
 langsung dari `NEUROVI_LLM_*`; Discord hanya menerima URL dan shared gateway
 token. Setup lengkap dijelaskan di `docs/server-deployment.md`.
+
+Di Discord, rekonsiliasi menggunakan alur terpandu: user memilih nama proses
+dari autocomplete, lalu menjawab melalui tombol atau formulir singkat. Session
+ID dan kode keputusan internal tetap tersedia untuk audit tetapi tidak perlu
+diketik oleh user operasional.
+
+Pertanyaan biasa di channel yang diizinkan otomatis dibuatkan thread bantuan
+tanpa perlu tag bot. Pesan, mention, DM, dan slash command di luar channel yang
+diizinkan tidak diproses; hanya thread bantuan yang dibuat bot dari channel
+tersebut yang tetap menerima pesan lanjutan.
+Jawaban mengarahkan user ke slash command yang tersedia dan tidak pernah
+menjalankan tool atau mengubah dokumen dari chat biasa. Jika kebutuhannya belum
+didukung, bot menyebutkan perlunya enhancement developer serta memberi
+workaround dengan command yang ada.
