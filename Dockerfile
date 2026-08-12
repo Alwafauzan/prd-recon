@@ -7,6 +7,10 @@ ENV NEUROVI_REPO_ROOT=/repository
 
 WORKDIR /opt/neurovi
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends git openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml README.md AGENTS.md ./
 COPY src ./src
 COPY scripts ./scripts

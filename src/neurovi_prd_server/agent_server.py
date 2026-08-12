@@ -77,6 +77,12 @@ class ReconciliationRequestHandler(BaseHTTPRequestHandler):
         try:
             result = self.server.agent.invoke(payload)
         except ReconciliationAgentError as error:
+            LOGGER.warning(
+                "Reconciliation request rejected: capability=%s status=%s reason=%s",
+                payload.get("capability", ""),
+                error.status_code,
+                error,
+            )
             self._json(error.status_code, {"message": str(error), "status": "ERROR"})
             return
         except Exception:

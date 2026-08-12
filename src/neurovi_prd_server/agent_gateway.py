@@ -52,6 +52,18 @@ class AgentGateway:
                 request, timeout=self.timeout_seconds
             ) as response:
                 body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            try:
+                decoded = json.loads(body)
+            except json.JSONDecodeError:
+                decoded = None
+            message = decoded.get("message") if isinstance(decoded, Mapping) else None
+            if not isinstance(message, str) or not message.strip():
+                message = error.reason or "Unknown gateway error."
+            raise AgentGatewayError(
+                f"Agent gateway rejected request ({error.code}): {message}"
+            ) from error
         except (urllib.error.URLError, TimeoutError) as error:
             raise AgentGatewayError(f"Agent gateway request failed: {error}") from error
         try:

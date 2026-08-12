@@ -11,6 +11,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from neurovi_prd_server.agent_gateway import AgentGateway, AgentGatewayError
 from neurovi_prd_server.agent_server import ReconciliationHTTPServer
 from neurovi_prd_server.capabilities import CapabilityError, CapabilityRunner
 from neurovi_prd_server.config import ConfigurationError, Settings
@@ -22,7 +23,11 @@ from neurovi_prd_server.help_system import (
     strip_bot_mention,
 )
 from neurovi_prd_server.llm_client import LLMResult, OpenAICompatibleLLM
-from neurovi_prd_server.reconciliation_agent import ReconciliationAgent, SessionStore
+from neurovi_prd_server.reconciliation_agent import (
+    ReconciliationAgent,
+    ReconciliationAgentError,
+    SessionStore,
+)
 
 
 TOOLS_REPO = Path(__file__).resolve().parents[1]
@@ -318,6 +323,41 @@ class AgentHTTPTests(unittest.TestCase):
             with urllib.request.urlopen(authorized, timeout=5) as response:
                 result = json.loads(response.read().decode())
             self.assertEqual(result["message"], "reconcile.status")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_gateway_preserves_agent_error_message(self) -> None:
+        class Agent:
+            model_profile = {
+                "provider": "9router",
+                "model": "model-name",
+                "reasoning_effort": "high",
+            }
+
+            def invoke(self, payload):
+                del payload
+                raise ReconciliationAgentError(
+                    "E2E selector did not match the inventory.", 422
+                )
+
+        server = ReconciliationHTTPServer(("127.0.0.1", 0), Agent(), "shared-secret")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        gateway = AgentGateway(
+            f"http://127.0.0.1:{server.server_port}/invoke",
+            token="shared-secret",
+            timeout_seconds=5,
+        )
+        try:
+            with self.assertRaises(AgentGatewayError) as captured:
+                gateway.invoke("reconcile.start", {"e2e": "missing"}, {})
+            self.assertIn("422", str(captured.exception))
+            self.assertIn(
+                "E2E selector did not match the inventory.",
+                str(captured.exception),
+            )
         finally:
             server.shutdown()
             server.server_close()
