@@ -9,14 +9,16 @@ from typing import Any, Mapping
 HELP_SESSION_THREAD_PREFIX = "neurovi-help-"
 
 COMMAND_GUIDANCE = {
-    "/help": "opsional isi `topic` dengan prd, e2e, gap, inventory, version, repo, atau reconcile",
+    "/mulai": "tidak memerlukan isian; pilih kebutuhan Anda lewat tombol",
+    "/help": "opsional isi `topic` dengan prd, e2e, gap, health, inventory, version, repo, atau reconcile",
     "/prd list": "isi `query` dengan kata yang Anda ingat; `limit` boleh dibiarkan default",
     "/prd show": "isi `document` dengan DOC-ID atau nama dokumen; `section` hanya jika ingin bagian tertentu",
     "/e2e list": "isi `query` dengan nama proses; filter lain boleh dikosongkan",
     "/e2e show": "isi `e2e_code_or_name` dengan kode atau nama proses",
-    "/gap list": "tidak memerlukan parameter",
-    "/gap e2e": "isi `e2e_code_or_name` dengan kode atau nama proses",
-    "/gap prd": "isi `document` dengan DOC-ID atau nama dokumen",
+    "/gap alur": "ketik sebagian nama proses pada `e2e_code_or_name`, lalu pilih hasil yang muncul",
+    "/gap kasus": "ketik sebagian nama proses pada `e2e_code_or_name`, lalu pilih hasil yang muncul",
+    "/document-health flow": "opsional pilih satu flow; kosongkan untuk tabel semua flow",
+    "/document-health all": "tidak memerlukan parameter",
     "/inventory find-prd": "isi `query` dengan kode, judul, atau kata kunci dokumen",
     "/inventory scan-format": "isi `document` dengan DOC-ID dokumen",
     "/version list": "tidak memerlukan parameter",
@@ -24,14 +26,8 @@ COMMAND_GUIDANCE = {
     "/repo health": "tidak memerlukan parameter",
     "/repo validate": "tidak memerlukan parameter",
     "/repo commands": "tidak memerlukan parameter",
-    "/reconcile start": "ketik sebagian nama proses pada `e2e_code_or_name`, lalu pilih hasil yang muncul",
-    "/reconcile continue": "tidak memerlukan parameter; membuka sesi aktif terakhir milik Anda",
-    "/reconcile answer": "fallback admin: isi `session_id` dan jawaban bebas pada `answer`",
-    "/reconcile control": "fallback admin: isi `session_id`, lalu pilih SKIP, DEFER, atau UNKNOWN pada `action`",
-    "/reconcile add-reference": "fallback admin: isi `session_id` dan lokasi referensi pada `reference`",
-    "/reconcile decide": "fallback admin: isi `session_id` dan keputusan pada `decision`",
-    "/reconcile status": "fallback admin: isi `session_id`",
-    "/finish": "isi `session_id`, pilih `approval` BASELINE_APPROVAL, dan pilih `bump`; publikasi saat ini dapat ditolak sebagai belum tersedia",
+    "/reconcile alur": "ketik sebagian nama proses untuk memperbaiki gap alur utama",
+    "/reconcile detail": "ketik sebagian nama proses untuk memperbaiki gap detail proses",
 }
 KNOWN_SLASH_COMMANDS = frozenset(COMMAND_GUIDANCE)
 
@@ -57,17 +53,16 @@ Safety and behavior:
   invent or return parameter names or command syntax.
 
 Available command catalog:
+- /mulai: open the primary guided menu for nontechnical users.
 - /prd list, /prd show: find or read immutable original PRDs.
-- /e2e list, /e2e show: find or inspect E2E process inventory and source flows.
-- /gap list, /gap e2e, /gap prd: scan diagnostic context gaps without changing documents.
+- /e2e list, /e2e show: find or inspect E2E domain worklists and relationships.
+- /gap alur: scan continuity of one E2E main business flow without changing documents.
+- /gap kasus: scan detailed scenarios, rules, validation, and exceptions in one E2E.
+- /document-health flow, /document-health all: show read-only document health statistics per flow or for the entire repository.
 - /inventory find-prd, /inventory scan-format: search coverage or inspect PRD heading format.
 - /version list, /version compare: inspect global repository versions.
 - /repo health, /repo validate, /repo commands: inspect service/repository health and capabilities.
-- /reconcile start, /reconcile continue: start or resume the guided controlled review.
-- /reconcile answer, /reconcile control, /reconcile add-reference,
-  /reconcile decide, /reconcile status: administrative reconciliation fallbacks.
-- /finish: request approved global publication; current runtime may report that
-  publication is not implemented rather than commit or push.
+- /reconcile alur, /reconcile detail: start the selected guided reconciliation mode.
 - /help: show this command guidance.
 
 Response contract:
@@ -97,21 +92,25 @@ command yang tepat. Pesan biasa hanya meminta panduan: bot tidak menjalankan
 command dan tidak mengubah dokumen dari chat tersebut. Direct message dilayani
 tanpa membuat thread.
 
-Command utama:
-- /prd list, /prd show - mencari dan menampilkan PRD original.
-- /e2e list, /e2e show - melihat inventaris dan detail E2E.
-- /gap list, /gap e2e, /gap prd - memindai gap konteks.
-- /inventory find-prd, /inventory scan-format - mencari dokumen dan format.
-- /version list, /version compare - melihat versi global repository.
-- /repo health, /repo validate, /repo commands - status dan validasi.
-- /reconcile ... - rekonsiliasi terkontrol melalui agent gateway.
-- /finish - menutup sesi dan menerbitkan versi global yang disetujui.
+Untuk mulai, jalankan `/mulai`, lalu pilih tombol sesuai kebutuhan:
+
+- **Perbaiki alur utama** untuk menutup gap urutan dan perpindahan proses.
+- **Perbaiki detail proses** untuk menutup gap skenario, aturan, dan validasi.
+- **Lanjut alur utama** atau **Lanjut detail proses** untuk membuka sesi aktif.
+- **Lihat alur proses** atau **Cari dokumen** untuk kebutuhan baca saja.
+- **Periksa alur utama** untuk mengecek kesinambungan proses dari awal sampai akhir.
+- **Periksa detail kasus** untuk mengecek skenario, aturan, validasi, dan pengecualian.
+- **Kesehatan per flow** atau **Kesehatan keseluruhan** untuk melihat statistik dokumen.
+
+Saat pemeriksaan berlangsung, semua jawaban menggunakan tombol atau formulir.
+Tombol **Akhiri sesi** selalu tersedia dan tidak menerbitkan, commit, atau push
+dokumen.
 
 Jika belum tahu harus mulai dari mana, jelaskan tujuan Anda, misalnya:
 "Saya ingin melihat dokumen pendaftaran rawat jalan" atau
 "Saya ingin memeriksa bagian proses yang belum jelas".
 
-Gunakan /help topic:<prd|e2e|gap|inventory|version|repo|reconcile> untuk
+Gunakan /help topic:<prd|e2e|gap|health|inventory|version|repo|reconcile> untuk
 melihat satu kelompok command."""
 
 
@@ -119,13 +118,13 @@ GETTING_STARTED = """# Mulai dari sini
 
 Tidak perlu mengetahui kode dokumen atau kode E2E terlebih dahulu.
 
-1. Jika ingin mencari dokumen, jalankan `/prd list` dan isi `query` dengan nama
-   atau kata yang Anda ingat.
-2. Jika ingin mencari proses, jalankan `/e2e list` dan isi `query` dengan nama
-   proses.
-3. Jika ingin mulai peninjauan terpandu, jalankan `/reconcile start`, ketik
-   sebagian nama proses, lalu pilih hasil yang muncul.
-4. Jika sebelumnya sudah mulai, jalankan `/reconcile continue`.
+1. Jalankan `/mulai`.
+2. Pilih kebutuhan Anda melalui tombol.
+3. Jika diminta memilih proses, pilih namanya dari daftar.
+4. Saat pemeriksaan berlangsung, jawab dengan tombol atau formulir singkat.
+5. Pilih jenis rekonsiliasi yang sesuai; kedua jenis memiliki sesi terpisah.
+6. Pilih **Akhiri sesi** kapan saja jika ingin berhenti. Jawaban tetap tersimpan
+   dan pertanyaan yang belum selesai tetap terbuka.
 
 Pesan chat ini tidak menjalankan langkah tersebut. Pilih command di atas agar
 bot dapat membaca atau memproses permintaan Anda secara aman."""
@@ -153,28 +152,32 @@ Jika nama ambigu, bot mengembalikan pilihan DOC-ID dan tidak memilih otomatis.""
         """# Bantuan E2E
 
 - /e2e list [query] [group] [status] [limit]
-  Menampilkan inventaris E2E dan status kandidatnya.
+  Menampilkan worklist domain E2E dan jumlah PRD uniknya.
 - /e2e show e2e_code_or_name:<kode atau nama>
-  Menampilkan node, edge, source flow, dan membership eksplisit.
+  Menampilkan urutan PRD, pemeriksaan flow, dan relasi lintas domain.
 
 Contoh:
-/e2e show e2e_code_or_name:E2E-ADM-01
+/e2e show e2e_code_or_name:E2E-RJ
 
-Kandidat mekanis tetap dipisahkan dari membership yang sudah eksplisit.""",
+Assignment dan relasi mekanis tetap dipisahkan dari keputusan pengguna.""",
     ),
     HelpTopic(
         "gap",
         ("gap", "scan", "scanner", "defect", "missing", "kurang", "konteks"),
-        """# Bantuan Gap Scanner
+        """# Bantuan Pemeriksaan PRD
 
-- /gap list
-  Menampilkan E2E yang masih memiliki gap candidate.
-- /gap e2e e2e_code_or_name:<kode atau nama>
-  Memindai gap lintas dokumen pada satu E2E.
-- /gap prd document:<DOC-ID atau nama>
-  Memindai gap internal dan struktur satu PRD.
+Ada dua pemeriksaan yang terpisah:
 
-Hasil scan adalah kandidat review, bukan keputusan atau perubahan dokumen.""",
+- /gap alur e2e_code_or_name:<kode atau nama>
+  Memeriksa pemicu, urutan proses, perpindahan antar-PRD, hasil, perubahan status,
+  dan kelanjutan ke domain lain.
+- /gap kasus e2e_code_or_name:<kode atau nama>
+  Memeriksa skenario alternatif, kondisi, aturan bisnis, validasi, error,
+  pengecualian, dan kriteria penerimaan pada PRD dalam proses tersebut.
+
+Pilih **alur** jika ingin mengetahui apakah proses tersambung dari awal sampai
+akhir. Pilih **kasus** jika alur sudah diketahui dan Anda ingin memeriksa detail
+perilakunya. Kedua hasil hanya kandidat review dan tidak mengubah dokumen.""",
     ),
     HelpTopic(
         "inventory",
@@ -199,6 +202,20 @@ Gunakan /prd show setelah menemukan DOC-ID yang tepat.""",
   Menampilkan dokumen yang berubah antarversi.
 
 Versi berlaku untuk repository secara global, bukan per PRD atau per E2E.""",
+    ),
+    HelpTopic(
+        "health",
+        ("health", "kesehatan", "statistik", "kelengkapan", "coverage"),
+        """# Bantuan Kesehatan Dokumen
+
+- /document-health flow [e2e_code_or_name]
+  Menampilkan statistik setiap flow. Pilih satu flow jika ingin melihat daftar
+  PRD dan area yang perlu ditinjau.
+- /document-health all
+  Menampilkan ringkasan seluruh repository dan flow prioritas.
+
+Angka menunjukkan konteks yang terdeteksi oleh scanner, bukan nilai mutu final
+atau bukti bahwa isi PRD sudah benar. Command ini tidak mengubah dokumen.""",
     ),
     HelpTopic(
         "repo",
@@ -228,30 +245,19 @@ Validasi tidak mengubah source/original/.""",
 
 Untuk user operasional:
 
-- Jalankan /reconcile start, ketik sebagian nama proses, lalu pilih dari daftar.
-- Ikuti kartu panduan dan gunakan tombol yang tersedia.
-- Gunakan /reconcile continue untuk membuka kembali sesi terakhir Anda.
+- Jalankan `/mulai`, lalu pilih **Perbaiki alur utama** atau **Perbaiki detail proses**.
+- Pilih nama proses dari daftar; tidak perlu mengetahui kode proses.
+- Ikuti kartu panduan dan gunakan tombol atau formulir yang tersedia.
+- Pilih **Akhiri sesi** kapan saja jika ingin berhenti.
 
-Tidak perlu mengingat session ID atau kode keputusan.
+Kedua proses tidak bercampur. Alur utama hanya membahas pemicu, urutan,
+perpindahan, hasil, status, dan kelanjutan proses. Detail proses hanya membahas
+skenario, kondisi, aturan, validasi, error, pengecualian, dan kriteria penerimaan.
 
-Fallback administrator:
-
-- /reconcile answer session_id:<ID> answer:<jawaban>
-- /reconcile control session_id:<ID> action:<SKIP|DEFER|UNKNOWN>
-- /reconcile add-reference session_id:<ID> reference:<path atau referensi>
-- /reconcile decide session_id:<ID> decision:<keputusan>
-- /reconcile status session_id:<ID>
-- /finish session_id:<ID> approval:BASELINE_APPROVAL bump:<patch|minor|major>
-
-Command ini memerlukan agent gateway dan role yang diizinkan. Runtime interview
-saat ini menyediakan daftar proses, tombol pilihan, dan formulir jawaban. User
-tidak perlu menyalin session ID atau mengetik kode keputusan; command answer,
-control, dan decide tetap tersedia sebagai fallback administrator. `/finish`
-saat ini ditahan dengan status NOT_ATTEMPTED dan tidak membuat commit
-atau push. Publisher final nantinya harus memvalidasi perubahan, menentukan
-versi berikutnya, membuat commit dan annotated tag, lalu melakukan atomic push.
-Jika masih ada konten belum disetujui, validasi gagal, working tree tidak aman,
-atau push gagal, proses harus ditolak tanpa menandai sesi selesai.""",
+Jawaban yang sudah diberikan tetap tersimpan. Pertanyaan yang belum selesai tidak
+dianggap terjawab atau disetujui. Mengakhiri sesi tidak menerbitkan versi, tidak
+membuat commit, dan tidak melakukan push. Publikasi baseline adalah proses
+approver terpisah dan belum tersedia melalui command user Discord.""",
     ),
 )
 

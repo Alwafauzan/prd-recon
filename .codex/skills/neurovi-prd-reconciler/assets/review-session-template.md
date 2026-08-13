@@ -1,5 +1,7 @@
 # Reconciliation Review - <E2E Code>
 
+- Reconciliation mode: `<RECONCILIATION_MODE>`
+
 ## E2E Selection
 
 | Candidate code | Title | Evidence origin | Boundary status | User decision |

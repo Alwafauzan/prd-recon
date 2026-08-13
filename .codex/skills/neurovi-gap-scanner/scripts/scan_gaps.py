@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import re
 import sys
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +54,10 @@ SECTION_FAMILIES = {
         "heading": ("business rule", "aturan bisnis"),
         "text": ("business rule", "aturan bisnis"),
     },
+    "VALIDATION_BEHAVIOR": {
+        "heading": ("validation", "validasi", "constraint", "batasan"),
+        "text": ("validasi", "harus valid", "tidak boleh", "wajib diisi"),
+    },
     "LOGICAL_DATA_FLOW": {
         "heading": ("data requirement", "data flow", "alur data", "spesifikasi field", "input", "output"),
         "text": ("data input", "data output", "alur data", "data requirement"),
@@ -72,6 +74,64 @@ SECTION_FAMILIES = {
         "heading": ("acceptance criteria", "kriteria penerimaan", "acceptance"),
         "text": ("acceptance criteria", "kriteria penerimaan"),
     },
+}
+
+MAIN_FLOW_FAMILIES = (
+    "PURPOSE_BACKGROUND",
+    "SCOPE",
+    "ACTORS_STAKEHOLDERS",
+    "TRIGGER_PRECONDITIONS",
+    "MAIN_FLOW",
+    "LOGICAL_DATA_FLOW",
+    "STATUS_LIFECYCLE",
+    "DEPENDENCIES_INTEGRATION",
+)
+
+BUSINESS_CASE_FAMILIES = (
+    "OUT_OF_SCOPE",
+    "ALTERNATE_FLOW",
+    "ERROR_EXCEPTION",
+    "CASES_CONDITIONS",
+    "BUSINESS_RULES",
+    "VALIDATION_BEHAVIOR",
+    "ACCEPTANCE_CRITERIA",
+)
+
+FLOW_CHECK_LABELS = {
+    "trigger_input": "Pemicu dan input awal",
+    "sequence": "Urutan proses",
+    "handoff": "Perpindahan ke proses berikutnya",
+    "output": "Hasil proses",
+    "status_transition": "Perubahan status",
+}
+
+FLOW_STATUS_LABELS = {
+    "SOURCE_CONTEXT_PRESENT": "Sudah ditemukan",
+    "REVIEW_REQUIRED": "Perlu ditinjau",
+    "NOT_EVALUATED": "Belum diperiksa",
+}
+
+BUSINESS_CASE_LABELS = {
+    "OUT_OF_SCOPE": "Batas kasus yang tidak termasuk",
+    "ALTERNATE_FLOW": "Skenario alternatif",
+    "ERROR_EXCEPTION": "Kegagalan dan pengecualian",
+    "CASES_CONDITIONS": "Kasus dan kondisi",
+    "BUSINESS_RULES": "Aturan bisnis",
+    "VALIDATION_BEHAVIOR": "Validasi",
+    "ACCEPTANCE_CRITERIA": "Kriteria penerimaan",
+}
+
+CONTEXT_STATUS_LABELS = {
+    "SECTION_PRESENT": "Sudah dijelaskan",
+    "CONTEXT_PRESENT_UNSTRUCTURED": "Ditemukan, tetapi belum terstruktur",
+    "CONTEXT_GAP_CANDIDATE": "Perlu ditinjau",
+}
+
+FLOW_RELATION_REQUIREMENTS = {
+    "ENTRY_POINT_TO": ("trigger",),
+    "PRODUCES": ("output_context",),
+    "HANDOFF_TO": ("output_context", "status_transition", "condition"),
+    "ACTIVATES": ("status_transition",),
 }
 
 EXPLICIT_GAP_MARKERS = (
@@ -97,26 +157,14 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def read_csv_optional(path: Path) -> list[dict[str, str]]:
-    if not path.is_file():
-        return []
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        return list(csv.DictReader(handle))
-
-
-def load_domains(repo: Path) -> list[dict[str, Any]]:
-    path = repo / "reconciliation/e2e-inventory/e2e-domain-inventory.json"
-    return read_json(path).get("domains", [])
+def load_inventory(repo: Path) -> dict[str, Any]:
+    path = repo / "reconciliation/e2e-inventory/domain-worklist.json"
+    return read_json(path)
 
 
 def load_documents(repo: Path) -> dict[str, dict[str, Any]]:
     path = repo / "catalog/document-index.json"
     return {item["document_id"]: item for item in read_json(path).get("documents", [])}
-
-
-def load_coverage(repo: Path) -> dict[str, dict[str, str]]:
-    path = repo / "reconciliation/e2e-inventory/document-e2e-coverage.csv"
-    return {row["document_id"]: row for row in read_csv_optional(path)}
 
 
 def resolve_e2e(query: str, domains: list[dict[str, Any]]) -> dict[str, Any]:
@@ -164,26 +212,17 @@ def resolve_document(query: str, documents: dict[str, dict[str, Any]]) -> dict[s
     raise GapScanError(f"No document matches: {query}")
 
 
-def workspace_rows(repo: Path, e2e_code: str) -> dict[str, list[dict[str, str]]]:
-    workspace = repo / "reconciliation/workspaces" / e2e_code
-    return {
-        "selections": read_csv_optional(workspace / "document-selection.csv"),
-        "traces": read_csv_optional(workspace / "context-trace.csv"),
-        "defects": read_csv_optional(workspace / "defect-register.csv"),
-        "interviews": read_csv_optional(workspace / "interview-register.csv"),
-    }
-
-
-def split_codes(value: str) -> set[str]:
-    return {item for item in value.split("|") if item}
-
-
 def document_content(repo: Path, document_id: str) -> str:
     path = repo / "documents" / document_id / "content.md"
     return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
 
 
-def scan_document_internal(repo: Path, document: dict[str, Any]) -> dict[str, Any]:
+def scan_document_internal(
+    repo: Path,
+    document: dict[str, Any],
+    context_families: tuple[str, ...] | None = None,
+    include_explicit_markers: bool = True,
+) -> dict[str, Any]:
     headings = [item.get("text", "") for item in document.get("headings", [])]
     if document.get("extension", "").casefold() in {".mmd", ".json", ".html", ".svg"}:
         return {
@@ -202,7 +241,9 @@ def scan_document_internal(repo: Path, document: dict[str, Any]) -> dict[str, An
     content = document_content(repo, document["document_id"])
     folded_content = content.casefold()
     families = []
-    for family, patterns in SECTION_FAMILIES.items():
+    selected_families = context_families or tuple(SECTION_FAMILIES)
+    for family in selected_families:
+        patterns = SECTION_FAMILIES[family]
         matched_headings = [
             heading
             for heading, folded in zip(headings, folded_headings)
@@ -226,20 +267,25 @@ def scan_document_internal(repo: Path, document: dict[str, Any]) -> dict[str, An
         )
 
     explicit_markers = []
-    for line_number, line in enumerate(content.splitlines(), start=1):
-        folded = line.casefold()
-        markers = [marker for marker in EXPLICIT_GAP_MARKERS if re.search(rf"\b{re.escape(marker)}\b", folded)]
-        if markers:
-            explicit_markers.append(
-                {
-                    "line": line_number,
-                    "markers": markers,
-                    "text": line.strip()[:300],
-                    "status": "EXPLICIT_GAP_MARKER_CANDIDATE",
-                }
-            )
-        if len(explicit_markers) >= 20:
-            break
+    if include_explicit_markers:
+        for line_number, line in enumerate(content.splitlines(), start=1):
+            folded = line.casefold()
+            markers = [
+                marker
+                for marker in EXPLICIT_GAP_MARKERS
+                if re.search(rf"\b{re.escape(marker)}\b", folded)
+            ]
+            if markers:
+                explicit_markers.append(
+                    {
+                        "line": line_number,
+                        "markers": markers,
+                        "text": line.strip()[:300],
+                        "status": "EXPLICIT_GAP_MARKER_CANDIDATE",
+                    }
+                )
+            if len(explicit_markers) >= 20:
+                break
 
     gap_families = [item["context_family"] for item in families if item["status"] == "CONTEXT_GAP_CANDIDATE"]
     return {
@@ -256,395 +302,515 @@ def scan_document_internal(repo: Path, document: dict[str, Any]) -> dict[str, An
     }
 
 
-def related_documents(domain: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
-
-    def add(document_id: str, evidence: str, title: str = "", source_path: str = "", score: int = 0) -> None:
-        if not document_id:
-            return
-        row = rows.setdefault(
-            document_id,
-            {
-                "document_id": document_id,
-                "title": title,
-                "source_path": source_path,
-                "relationship_evidence": set(),
-                "matched_contexts": set(),
-                "max_match_score": 0,
-            },
+def flow_relation_evidence(relation: dict[str, Any]) -> dict[str, str]:
+    return {
+        field: str(relation.get(field, "")).strip()
+        for field in (
+            "trigger",
+            "input_context",
+            "output_context",
+            "status_transition",
+            "condition",
         )
-        row["relationship_evidence"].add(evidence)
-        row["max_match_score"] = max(row["max_match_score"], score)
+        if str(relation.get(field, "")).strip()
+    }
 
-    add(domain.get("flow_document_id", ""), "SOURCE_FLOW", domain.get("title", ""), domain.get("source_path", ""))
-    for membership in domain.get("explicit_memberships", []):
-        add(
-            membership.get("document_id", ""),
-            "SOURCE_EXPLICIT_MEMBERSHIP",
-            membership.get("document_title", ""),
-            membership.get("source_path", ""),
-        )
-    candidate_sources = [("PROCESS_TITLE", domain.get("flow_title_candidates", []))]
-    candidate_sources.extend(
-        (node.get("node_label", node.get("node_id", "")), node.get("document_candidates", []))
-        for node in domain.get("nodes", [])
+
+def is_flow_relation(relation: dict[str, Any]) -> bool:
+    return (
+        relation.get("relationship_type") in FLOW_RELATION_REQUIREMENTS
+        or bool(flow_relation_evidence(relation))
     )
-    for context, candidates in candidate_sources:
-        for candidate in candidates:
-            document_id = candidate.get("candidate_document_id", "")
-            add(
-                document_id,
-                candidate.get("candidate_status", "MECHANICAL_CANDIDATE"),
-                candidate.get("candidate_title", ""),
-                candidate.get("source_path", ""),
-                int(candidate.get("match_score", 0)),
-            )
-            if document_id:
-                rows[document_id]["matched_contexts"].add(context)
-    return rows
 
 
-def e2e_gap_summary(repo: Path, domain: dict[str, Any]) -> dict[str, Any]:
-    rows = workspace_rows(repo, domain["e2e_code"])
-    gap_types: list[str] = []
-    counts: dict[str, int] = {}
-
-    def gap(gap_type: str, count: int = 1) -> None:
-        if count <= 0:
-            return
-        gap_types.append(gap_type)
-        counts[gap_type] = count
-
-    if domain.get("origin") == "mermaid-source" and domain.get("status") not in {"CONFIRMED", "BASELINED"}:
-        gap("UNCONFIRMED_E2E_BOUNDARY")
-    if int(domain.get("explicit_membership_count", 0)) == 0:
-        gap("NO_EXPLICIT_DOCUMENT_MEMBERSHIP")
-    confirmed_selections = [
-        row for row in rows["selections"] if row.get("selection_status") in {"CONFIRMED_INCLUDE", "CONTEXT_ONLY"}
+def scan_main_flow(repo: Path, query: str) -> dict[str, Any]:
+    inventory = load_inventory(repo)
+    domain = resolve_e2e(query, inventory.get("domains", []))
+    relation_ids = set(domain.get("relation_ids", []))
+    relations = [
+        relation
+        for relation in inventory.get("relations", [])
+        if relation.get("relation_id") in relation_ids
     ]
-    if not confirmed_selections:
-        gap("NO_CONFIRMED_DOCUMENT_SELECTION")
-    nodes_without_candidates = [node for node in domain.get("nodes", []) if not node.get("document_candidates")]
-    gap("FLOW_NODE_WITHOUT_DOCUMENT_CANDIDATE", len(nodes_without_candidates))
-    relationships = related_documents(domain)
-    candidate_ids = {
-        document_id
-        for document_id, relationship in relationships.items()
-        if any("CANDIDATE" in evidence for evidence in relationship["relationship_evidence"])
-    }
-    reviewed_ids = {row.get("document_id", "") for row in rows["selections"]}
-    gap("MECHANICAL_CANDIDATES_UNREVIEWED", len(candidate_ids - reviewed_ids))
-    confirmed_traces = [row for row in rows["traces"] if row.get("approval_status") in {"USER_CONFIRMED", "CONFIRMED"}]
-    if domain.get("edges") and not confirmed_traces:
-        gap("NO_CONFIRMED_CONTEXT_TRACE", len(domain.get("edges", [])))
-    open_defects = [
-        row
-        for row in rows["defects"]
-        if row.get("status") in {"OPEN", "AWAITING_USER_DECISION"}
-    ]
-    gap("OPEN_RECONCILIATION_DEFECT", len(open_defects))
-    open_interviews = [
-        row
-        for row in rows["interviews"]
-        if row.get("status") in {"SKIPPED_BY_USER", "DEFERRED", "UNKNOWN", "PENDING", "CANDIDATE_FROM_RELATED_ANSWER"}
-    ]
-    gap("SKIPPED_OR_DEFERRED_QUESTION", len(open_interviews))
-    return {
-        "e2e_code": domain.get("e2e_code", ""),
-        "title": domain.get("title", ""),
-        "status": domain.get("status", ""),
-        "evidence_class": "USER_CONFIRMED_GAP" if open_defects else "MECHANICAL_GAP_CANDIDATE",
-        "gap_candidate_count": sum(counts.values()),
-        "open_confirmed_gap_count": len(open_defects),
-        "gap_types": gap_types,
-        "gap_type_counts": counts,
-    }
+    flow_relations = [relation for relation in relations if is_flow_relation(relation)]
 
-
-def scan_all_e2e(repo: Path) -> dict[str, Any]:
-    rows = [e2e_gap_summary(repo, domain) for domain in load_domains(repo)]
-    rows = [row for row in rows if row["gap_candidate_count"] > 0]
-    rows.sort(key=lambda row: (-row["open_confirmed_gap_count"], -row["gap_candidate_count"], row["e2e_code"]))
-    return {
-        "scan_mode": "ALL_E2E",
-        "authority": "DIAGNOSTIC_ONLY",
-        "e2e_with_gaps_count": len(rows),
-        "e2e": rows,
-        "warning": "Mechanical findings are review candidates, not approved semantic defects.",
-    }
-
-
-def scan_e2e(repo: Path, query: str) -> dict[str, Any]:
-    domains = load_domains(repo)
-    domain = resolve_e2e(query, domains)
-    documents = load_documents(repo)
-    related = related_documents(domain)
-    rows = workspace_rows(repo, domain["e2e_code"])
-    selections = {row.get("document_id", ""): row for row in rows["selections"]}
-    mapped_documents = []
-    content_groups: defaultdict[str, list[str]] = defaultdict(list)
-    for document_id, relationship in related.items():
-        document = documents.get(document_id, {})
-        if document.get("content_id"):
-            content_groups[document["content_id"]].append(document_id)
-        internal = scan_document_internal(repo, document) if document else None
-        selection = selections.get(document_id, {})
-        mapped_documents.append(
-            {
-                "document_id": document_id,
-                "title": document.get("title", relationship.get("title", "")),
-                "source_path": document.get("source_path", relationship.get("source_path", "")),
-                "content_id": document.get("content_id", ""),
-                "relationship_evidence": sorted(relationship["relationship_evidence"]),
-                "approval_status": selection.get("selection_status", "UNREVIEWED"),
-                "max_match_score": relationship["max_match_score"],
-                "matched_contexts": sorted(relationship["matched_contexts"]),
-                "internal_gap_candidate_count": internal["gap_candidate_count"] if internal else 0,
-                "internal_gap_candidate_families": internal["gap_candidate_families"] if internal else [],
-            }
-        )
-    mapped_documents.sort(key=lambda row: (row["approval_status"] == "UNREVIEWED", -row["max_match_score"], row["title"].casefold()))
-
-    duplicate_groups = [
-        {"content_id": content_id, "document_ids": document_ids}
-        for content_id, document_ids in sorted(content_groups.items())
-        if len(document_ids) > 1
-    ]
-    node_gaps = [
-        {
-            "node_id": node.get("node_id", ""),
-            "node_label": node.get("node_label", ""),
-            "gap_type": "FLOW_NODE_WITHOUT_DOCUMENT_CANDIDATE",
-            "evidence_class": "MECHANICAL_GAP_CANDIDATE",
+    documents = []
+    flow_gap_candidates = []
+    for membership in sorted(
+        domain.get("documents", []), key=lambda item: item.get("worklist_order", 0)
+    ):
+        checks = {
+            key: membership.get("flow_checks", {}).get(key, "NOT_EVALUATED")
+            for key in FLOW_CHECK_LABELS
         }
-        for node in domain.get("nodes", [])
-        if not node.get("document_candidates")
-    ]
-    node_documents = {
-        node.get("node_id", ""): sorted(
-            {candidate.get("candidate_document_id", "") for candidate in node.get("document_candidates", []) if candidate.get("candidate_document_id")}
-        )
-        for node in domain.get("nodes", [])
-    }
-    handoff_gap_candidates = []
-    for edge in domain.get("edges", []):
-        from_documents = node_documents.get(edge.get("from_node", ""), [])
-        to_documents = node_documents.get(edge.get("to_node", ""), [])
-        gap_type = "UNCONFIRMED_DOCUMENT_HANDOFF"
-        if not from_documents or not to_documents:
-            gap_type = "UNMAPPED_HANDOFF_ENDPOINT"
-        handoff_gap_candidates.append(
-            {
-                "from_node": edge.get("from_node", ""),
-                "to_node": edge.get("to_node", ""),
-                "edge_label": edge.get("edge_label", ""),
-                "from_document_candidates": from_documents,
-                "to_document_candidates": to_documents,
-                "gap_type": gap_type,
+        document_gaps = []
+        for key, status in checks.items():
+            if status == "SOURCE_CONTEXT_PRESENT":
+                continue
+            finding = {
+                "gap_type": f"{key.upper()}_REVIEW_REQUIRED",
                 "evidence_class": "MECHANICAL_GAP_CANDIDATE",
-                "reason": "No confirmed document context trace links this source-flow edge.",
+                "document_id": membership.get("document_id", ""),
+                "title": membership.get("title", ""),
+                "source_path": membership.get("source_path", ""),
+                "worklist_order": membership.get("worklist_order", 0),
+                "worklist_stage": membership.get("worklist_stage", ""),
+                "flow_aspect": key,
+                "flow_aspect_label": FLOW_CHECK_LABELS[key],
+                "status": status,
+                "reason": (
+                    "Inventaris belum menemukan konteks sumber yang cukup untuk "
+                    f"{FLOW_CHECK_LABELS[key].casefold()}."
+                ),
             }
-        )
-    confirmed_traces = [row for row in rows["traces"] if row.get("approval_status") in {"USER_CONFIRMED", "CONFIRMED"}]
-    cross_document_gaps = []
-    if domain.get("edges") and not confirmed_traces:
-        cross_document_gaps.append(
+            document_gaps.append(finding)
+            flow_gap_candidates.append(finding)
+        documents.append(
             {
-                "gap_type": "NO_CONFIRMED_CONTEXT_TRACE",
-                "evidence_class": "MECHANICAL_GAP_CANDIDATE",
-                "affected_edge_count": len(domain.get("edges", [])),
-                "evidence": "No confirmed context-trace rows found for this E2E workspace.",
-            }
-        )
-    unreviewed = [row for row in mapped_documents if row["approval_status"] == "UNREVIEWED" and "SOURCE_FLOW" not in row["relationship_evidence"]]
-    if unreviewed:
-        cross_document_gaps.append(
-            {
-                "gap_type": "RELATIONSHIP_UNCONFIRMED",
-                "evidence_class": "MECHANICAL_GAP_CANDIDATE",
-                "affected_document_count": len(unreviewed),
-                "evidence": "Related document candidates have no include/context/take-off decision.",
-            }
-        )
-    if duplicate_groups:
-        cross_document_gaps.append(
-            {
-                "gap_type": "SOURCE_REPRESENTATION_AMBIGUOUS",
-                "evidence_class": "MECHANICAL_GAP_CANDIDATE",
-                "duplicate_group_count": len(duplicate_groups),
-                "evidence": "Multiple related document IDs share exact content IDs.",
+                "worklist_order": membership.get("worklist_order", 0),
+                "worklist_stage": membership.get("worklist_stage", ""),
+                "document_id": membership.get("document_id", ""),
+                "title": membership.get("title", ""),
+                "source_path": membership.get("source_path", ""),
+                "flow_checks": checks,
+                "gap_candidate_count": len(document_gaps),
+                "gap_candidates": document_gaps,
             }
         )
 
-    open_defects = [row for row in rows["defects"] if row.get("status") in {"OPEN", "AWAITING_USER_DECISION"}]
-    open_interviews = [
-        row
-        for row in rows["interviews"]
-        if row.get("status") in {"SKIPPED_BY_USER", "DEFERRED", "UNKNOWN", "PENDING", "CANDIDATE_FROM_RELATED_ANSWER"}
-    ]
+    relation_gaps = []
+    relation_rows = []
+    for relation in flow_relations:
+        relation_type = str(relation.get("relationship_type", ""))
+        evidence = flow_relation_evidence(relation)
+        required_fields = FLOW_RELATION_REQUIREMENTS.get(relation_type, ())
+        if required_fields and not any(evidence.get(field) for field in required_fields):
+            relation_gaps.append(
+                {
+                    "gap_type": "UNDEFINED_FLOW_HANDOFF_CONTEXT",
+                    "evidence_class": "MECHANICAL_GAP_CANDIDATE",
+                    "relation_id": relation.get("relation_id", ""),
+                    "source_title": relation.get("source_title", ""),
+                    "target_title": relation.get("target_title", ""),
+                    "reason": "Relasi flow eksplisit belum memiliki konteks handoff yang diperlukan.",
+                    "evidence_reference": relation.get("evidence_reference", ""),
+                }
+            )
+        if relation.get("conflict_status") == "CONFLICT_FOUND":
+            relation_gaps.append(
+                {
+                    "gap_type": "CONFLICTING_FLOW_CONTEXT",
+                    "evidence_class": "SOURCE_EXPLICIT_GAP",
+                    "relation_id": relation.get("relation_id", ""),
+                    "source_title": relation.get("source_title", ""),
+                    "target_title": relation.get("target_title", ""),
+                    "reason": relation.get("notes", "Konflik konteks flow ditemukan."),
+                    "evidence_reference": relation.get("evidence_reference", ""),
+                }
+            )
+        relation_rows.append(
+            {
+                "relation_id": relation.get("relation_id", ""),
+                "source_document_id": relation.get("source_document_id", ""),
+                "source_title": relation.get("source_title", ""),
+                "source_domain_code": relation.get("source_domain_code", ""),
+                "target_document_id": relation.get("target_document_id", ""),
+                "target_title": relation.get("target_title", ""),
+                "target_domain_code": relation.get("target_domain_code", ""),
+                "relationship_type": relation_type,
+                "relation_scope": relation.get("relation_scope", ""),
+                "flow_evidence": evidence,
+                "verification_status": relation.get("verification_status", ""),
+                "conflict_status": relation.get("conflict_status", ""),
+                "evidence_reference": relation.get("evidence_reference", ""),
+            }
+        )
+
+    all_gaps = flow_gap_candidates + relation_gaps
     return {
-        "scan_mode": "E2E",
+        "scanner": "MAIN_FLOW",
+        "scan_mode": "MAIN_FLOW_E2E",
         "authority": "DIAGNOSTIC_ONLY",
+        "scope": (
+            "Kesinambungan alur bisnis utama: pemicu, urutan, handoff, hasil, "
+            "status, kelanjutan lintas domain, dan konflik flow."
+        ),
         "e2e": {
             "e2e_code": domain.get("e2e_code", ""),
             "title": domain.get("title", ""),
-            "status": domain.get("status", ""),
-            "source_flow_document_id": domain.get("flow_document_id", ""),
-            "source_path": domain.get("source_path", ""),
-            "node_count": domain.get("node_count", 0),
-            "edge_count": domain.get("edge_count", 0),
+            "purpose": domain.get("purpose", ""),
+            "document_count": len(documents),
         },
-        "summary": e2e_gap_summary(repo, domain),
-        "mapped_documents": mapped_documents,
-        "cross_document_gaps": cross_document_gaps,
-        "handoff_gap_candidates": handoff_gap_candidates,
-        "flow_node_gaps": node_gaps,
-        "duplicate_content_groups": duplicate_groups,
-        "open_confirmed_defects": open_defects,
-        "unresolved_interview_questions": open_interviews,
-        "warning": "Mechanical candidates require review before reconciliation decisions.",
+        "summary": {
+            "gap_candidate_count": len(all_gaps),
+            "document_gap_candidate_count": len(flow_gap_candidates),
+            "relation_gap_candidate_count": len(relation_gaps),
+            "flow_relation_count": len(relation_rows),
+            "cross_domain_flow_relation_count": sum(
+                row["relation_scope"] == "CROSS_DOMAIN" for row in relation_rows
+            ),
+            "supporting_relation_count": len(relations) - len(relation_rows),
+        },
+        "ordered_documents": documents,
+        "flow_relations": relation_rows,
+        "gap_candidates": all_gaps,
+        "excluded_detail_families": list(BUSINESS_CASE_FAMILIES),
+        "warning": (
+            "Scanner ini tidak menilai skenario alternatif, error, validasi rinci, "
+            "atau acceptance criteria. Relasi referensi tanpa bukti flow dipakai "
+            "sebagai konteks penunjang dan tidak dihitung sebagai handoff."
+        ),
     }
 
 
 def document_related_e2e(repo: Path, document_id: str) -> list[dict[str, Any]]:
+    inventory = load_inventory(repo)
     related = []
-    for domain in load_domains(repo):
+    for domain in inventory.get("domains", []):
         evidence = set()
-        if domain.get("flow_document_id") == document_id:
-            evidence.add("SOURCE_FLOW")
-        if any(item.get("document_id") == document_id for item in domain.get("explicit_memberships", [])):
-            evidence.add("SOURCE_EXPLICIT_MEMBERSHIP")
-        candidates = related_documents(domain)
-        if document_id in candidates:
-            evidence.update(candidates[document_id]["relationship_evidence"])
-        rows = workspace_rows(repo, domain["e2e_code"])
-        selection = next((row for row in rows["selections"] if row.get("document_id") == document_id), None)
-        if evidence or selection:
+        for membership in domain.get("documents", []):
+            representation_ids = {
+                row.get("document_id", "")
+                for row in membership.get("source_representations", [])
+            }
+            if document_id == membership.get("document_id") or document_id in representation_ids:
+                evidence.add("OWNER_DOMAIN")
+        for relation in inventory.get("relations", []):
+            if relation.get("source_document_id") == document_id or relation.get("target_document_id") == document_id:
+                if relation.get("source_domain_code") == domain.get("e2e_code") or relation.get("target_domain_code") == domain.get("e2e_code"):
+                    evidence.add(f"RELATION:{relation.get('relation_id', '')}")
+        if evidence:
             related.append(
                 {
                     "e2e_code": domain.get("e2e_code", ""),
                     "title": domain.get("title", ""),
                     "evidence": sorted(evidence),
-                    "approval_status": selection.get("selection_status", "UNREVIEWED") if selection else "UNREVIEWED",
+                    "worklist_status": (
+                        "OWNER_WORKLIST" if "OWNER_DOMAIN" in evidence else "RELATED_CONTEXT"
+                    ),
                 }
             )
     return sorted(related, key=lambda row: row["e2e_code"])
 
 
-def document_register_findings(repo: Path, document_id: str) -> dict[str, Any]:
-    defects = []
-    interviews = []
-    workspaces = repo / "reconciliation/workspaces"
-    if not workspaces.is_dir():
-        return {"open_defects": defects, "unresolved_questions": interviews}
-    for workspace in workspaces.iterdir():
-        if not workspace.is_dir():
-            continue
-        for row in read_csv_optional(workspace / "defect-register.csv"):
-            if document_id in row.get("document_ids", "") and row.get("status") in {"OPEN", "AWAITING_USER_DECISION"}:
-                defects.append(row)
-        for row in read_csv_optional(workspace / "interview-register.csv"):
-            if document_id in row.get("document_ids", "") and row.get("status") in {
-                "SKIPPED_BY_USER", "DEFERRED", "UNKNOWN", "PENDING", "CANDIDATE_FROM_RELATED_ANSWER"
-            }:
-                interviews.append(row)
-    return {"open_defects": defects, "unresolved_questions": interviews}
+def eligible_document_ids(inventory: dict[str, Any]) -> set[str]:
+    document_ids = set()
+    for domain in inventory.get("domains", []):
+        for membership in domain.get("documents", []):
+            document_ids.add(membership.get("document_id", ""))
+            document_ids.update(
+                row.get("document_id", "")
+                for row in membership.get("source_representations", [])
+            )
+    return {document_id for document_id in document_ids if document_id}
 
 
-def scan_document(repo: Path, query: str) -> dict[str, Any]:
+def membership_case_check(
+    inventory: dict[str, Any], document_id: str
+) -> list[dict[str, str]]:
+    checks = []
+    for domain in inventory.get("domains", []):
+        for membership in domain.get("documents", []):
+            representation_ids = {
+                row.get("document_id", "")
+                for row in membership.get("source_representations", [])
+            }
+            if document_id != membership.get("document_id") and document_id not in representation_ids:
+                continue
+            checks.append(
+                {
+                    "e2e_code": domain.get("e2e_code", ""),
+                    "e2e_title": domain.get("title", ""),
+                    "status": membership.get("flow_checks", {}).get(
+                        "alternate_cases", "NOT_EVALUATED"
+                    ),
+                }
+            )
+    return checks
+
+
+def business_case_document_result(
+    repo: Path,
+    document: dict[str, Any],
+    inventory: dict[str, Any],
+) -> dict[str, Any]:
+    internal = scan_document_internal(
+        repo,
+        document,
+        context_families=BUSINESS_CASE_FAMILIES,
+        include_explicit_markers=True,
+    )
+    case_checks = membership_case_check(inventory, document["document_id"])
+    inventory_candidates = [
+        row for row in case_checks if row["status"] != "SOURCE_CONTEXT_PRESENT"
+    ]
+    return {
+        **internal,
+        "inventory_case_checks": case_checks,
+        "inventory_case_candidate_count": len(inventory_candidates),
+        "business_case_candidate_count": (
+            internal["gap_candidate_count"] + len(inventory_candidates)
+        ),
+    }
+
+
+def scan_business_cases_document(repo: Path, query: str) -> dict[str, Any]:
+    inventory = load_inventory(repo)
     documents = load_documents(repo)
     document = resolve_document(query, documents)
-    internal = scan_document_internal(repo, document)
-    registers = document_register_findings(repo, document["document_id"])
+    if document["document_id"] not in eligible_document_ids(inventory):
+        raise GapScanError(
+            "Document is not an eligible original Markdown PRD in the domain inventory."
+        )
+    result = business_case_document_result(repo, document, inventory)
     return {
-        "scan_mode": "DOCUMENT",
+        "scanner": "BUSINESS_CASES",
+        "scan_mode": "BUSINESS_CASES_DOCUMENT",
         "authority": "DIAGNOSTIC_ONLY",
-        "document": internal,
+        "scope": (
+            "Detail kasus bisnis: batas kasus, skenario alternatif, error, kondisi, "
+            "aturan bisnis, validasi, dan acceptance criteria."
+        ),
+        "document": result,
         "related_e2e": document_related_e2e(repo, document["document_id"]),
-        "open_confirmed_defects": registers["open_defects"],
-        "unresolved_interview_questions": registers["unresolved_questions"],
-        "warning": "Missing headings are format/context candidates, not proof that source facts are absent.",
+        "excluded_main_flow_families": list(MAIN_FLOW_FAMILIES),
+        "warning": (
+            "Keluarga konteks yang tidak terdeteksi adalah kandidat review, bukan "
+            "bukti bahwa fakta bisnis tidak ada. Informasi dapat ditulis dengan "
+            "heading atau istilah yang berbeda."
+        ),
     }
+
+
+def scan_business_cases_e2e(repo: Path, query: str) -> dict[str, Any]:
+    inventory = load_inventory(repo)
+    domain = resolve_e2e(query, inventory.get("domains", []))
+    documents = load_documents(repo)
+    rows = []
+    for membership in sorted(
+        domain.get("documents", []), key=lambda item: item.get("worklist_order", 0)
+    ):
+        document = documents.get(membership.get("document_id", ""))
+        if not document:
+            continue
+        result = business_case_document_result(repo, document, inventory)
+        rows.append(
+            {
+                **result,
+                "worklist_order": membership.get("worklist_order", 0),
+                "worklist_stage": membership.get("worklist_stage", ""),
+            }
+        )
+    rows_with_candidates = [
+        row for row in rows if row["business_case_candidate_count"] > 0
+    ]
+    return {
+        "scanner": "BUSINESS_CASES",
+        "scan_mode": "BUSINESS_CASES_E2E",
+        "authority": "DIAGNOSTIC_ONLY",
+        "scope": (
+            "Agregasi detail kasus bisnis pada PRD utama dalam satu domain E2E."
+        ),
+        "e2e": {
+            "e2e_code": domain.get("e2e_code", ""),
+            "title": domain.get("title", ""),
+            "purpose": domain.get("purpose", ""),
+            "document_count": len(rows),
+        },
+        "summary": {
+            "document_count": len(rows),
+            "documents_with_candidates": len(rows_with_candidates),
+            "gap_candidate_count": sum(
+                row["business_case_candidate_count"] for row in rows
+            ),
+        },
+        "documents": rows,
+        "excluded_main_flow_families": list(MAIN_FLOW_FAMILIES),
+        "warning": (
+            "Hasil agregat menunjukkan PRD yang perlu dibaca lebih rinci. Keluarga "
+            "konteks yang tidak terdeteksi bukan bukti bahwa fakta bisnis tidak ada."
+        ),
+    }
+
+
+def scan_business_cases(repo: Path, query: str, scope: str = "auto") -> dict[str, Any]:
+    if scope == "e2e":
+        return scan_business_cases_e2e(repo, query)
+    if scope == "document":
+        return scan_business_cases_document(repo, query)
+
+    inventory = load_inventory(repo)
+    folded = query.casefold().strip()
+    exact_domains = [
+        domain
+        for domain in inventory.get("domains", [])
+        if folded in {
+            str(domain.get("e2e_code", "")).casefold(),
+            str(domain.get("title", "")).casefold(),
+        }
+    ]
+    if len(exact_domains) == 1:
+        return scan_business_cases_e2e(repo, exact_domains[0]["e2e_code"])
+    if query.upper().startswith("E2E-"):
+        return scan_business_cases_e2e(repo, query)
+    return scan_business_cases_document(repo, query)
 
 
 def markdown_escape(value: Any) -> str:
     return str(value or "").replace("|", "\\|").replace("\n", " ")
 
 
-def print_markdown(result: dict[str, Any]) -> None:
-    mode = result["scan_mode"]
-    if mode == "ALL_E2E":
-        print("# E2E Gap Scan")
-        print()
-        print(result["warning"])
-        print()
-        print("| E2E | Title | Status | Gap candidates | Open confirmed | Primary gap types |")
-        print("|---|---|---|---:|---:|---|")
-        for row in result["e2e"]:
-            print(
-                f"| {row['e2e_code']} | {markdown_escape(row['title'])} | {row['status']} | "
-                f"{row['gap_candidate_count']} | {row['open_confirmed_gap_count']} | "
-                f"{markdown_escape(', '.join(row['gap_types']))} |"
-            )
-        return
-
-    if mode == "E2E":
-        e2e = result["e2e"]
-        print(f"# {e2e['e2e_code']} - {e2e['title']} Gap Scan")
-        print()
-        print(result["warning"])
-        print()
-        print("## Cross-Document Gaps")
-        print()
-        if not result["cross_document_gaps"]:
-            print("No cross-document gap candidates detected mechanically.")
-        for gap in result["cross_document_gaps"]:
-            print(f"- `{gap['gap_type']}`: {gap['evidence']}")
-        print()
-        print("## Related Documents")
-        print()
-        print("| Document | Title | Evidence | Approval | Internal gaps |")
-        print("|---|---|---|---|---:|")
-        for row in result["mapped_documents"]:
-            print(
-                f"| {row['document_id']} | {markdown_escape(row['title'])} | "
-                f"{markdown_escape(', '.join(row['relationship_evidence']))} | {row['approval_status']} | "
-                f"{row['internal_gap_candidate_count']} |"
-            )
-        print()
-        print(f"Flow nodes without document candidates: `{len(result['flow_node_gaps'])}`")
-        print(f"Flow handoffs without confirmed document traces: `{len(result['handoff_gap_candidates'])}`")
-        print(f"Open confirmed defects: `{len(result['open_confirmed_defects'])}`")
-        print(f"Unresolved interview questions: `{len(result['unresolved_interview_questions'])}`")
-        return
-
-    document = result["document"]
-    print(f"# {document['document_id']} - {document['title']} Gap Scan")
+def print_main_flow_markdown(result: dict[str, Any]) -> None:
+    e2e = result["e2e"]
+    summary = result["summary"]
+    print(f"# Pemeriksaan Alur Utama - {e2e['title']}")
+    print()
+    print(result["scope"])
+    print()
+    print(
+        f"Diperiksa: `{e2e['document_count']}` PRD utama dan "
+        f"`{summary['flow_relation_count']}` relasi flow eksplisit."
+    )
+    print(f"Kandidat yang perlu ditinjau: `{summary['gap_candidate_count']}`.")
+    print()
+    print("## Urutan Proses")
+    print()
+    print("| Tahap | Dokumen | Pemicu | Urutan | Handoff | Hasil | Status |")
+    print("|---:|---|---|---|---|---|---|")
+    for row in result["ordered_documents"]:
+        checks = row["flow_checks"]
+        print(
+            f"| {row['worklist_order']} | {markdown_escape(row['title'])} | "
+            f"{FLOW_STATUS_LABELS.get(checks['trigger_input'], checks['trigger_input'])} | "
+            f"{FLOW_STATUS_LABELS.get(checks['sequence'], checks['sequence'])} | "
+            f"{FLOW_STATUS_LABELS.get(checks['handoff'], checks['handoff'])} | "
+            f"{FLOW_STATUS_LABELS.get(checks['output'], checks['output'])} | "
+            f"{FLOW_STATUS_LABELS.get(checks['status_transition'], checks['status_transition'])} |"
+        )
+    print()
+    print("## Temuan Alur")
+    print()
+    if not result["gap_candidates"]:
+        print("Tidak ada kandidat gap alur utama yang terdeteksi dari inventaris saat ini.")
+    for gap in result["gap_candidates"]:
+        subject = gap.get("title") or (
+            f"{gap.get('source_title', '')} -> {gap.get('target_title', '')}"
+        )
+        print(
+            f"- **{markdown_escape(subject)}** — {gap['reason']}"
+        )
+    print()
+    print("## Handoff Eksplisit")
+    print()
+    if not result["flow_relations"]:
+        print("Belum ada relasi flow eksplisit yang terindeks untuk proses ini.")
+    for row in result["flow_relations"]:
+        evidence = "; ".join(row["flow_evidence"].values()) or "Konteks flow belum terisi"
+        print(
+            f"- **{markdown_escape(row['source_title'])} -> "
+            f"{markdown_escape(row['target_title'])}**: {markdown_escape(evidence)}"
+        )
     print()
     print(result["warning"])
+
+
+def print_business_case_document_markdown(result: dict[str, Any]) -> None:
+    document = result["document"]
+    print(f"# Pemeriksaan Kasus Bisnis - {document['title']}")
     print()
-    print(f"Source: `{document['source_path']}`")
+    print(result["scope"])
     print()
-    print("| Context family | Status | Matched headings/terms |")
+    print(f"Sumber: `{document['source_path']}`")
+    print()
+    print("| Area kasus bisnis | Status | Bukti yang ditemukan |")
     print("|---|---|---|")
     for family in document["families"]:
         evidence = family["matched_headings"] or family["matched_terms"]
         print(
-            f"| {family['context_family']} | {family['status']} | "
+            f"| {BUSINESS_CASE_LABELS.get(family['context_family'], family['context_family'])} | "
+            f"{CONTEXT_STATUS_LABELS.get(family['status'], family['status'])} | "
             f"{markdown_escape('; '.join(evidence)) or '-'} |"
         )
     print()
-    print(f"Gap candidates: `{document['gap_candidate_count']}`")
-    print(f"Explicit marker candidates: `{len(document['explicit_gap_markers'])}`")
+    print(
+        f"Kandidat detail kasus yang perlu ditinjau: "
+        f"`{document['business_case_candidate_count']}`."
+    )
+    print(
+        f"Penanda eksplisit belum selesai: "
+        f"`{len(document['explicit_gap_markers'])}`."
+    )
+    print()
+    print(result["warning"])
+
+
+def print_business_case_e2e_markdown(result: dict[str, Any]) -> None:
+    e2e = result["e2e"]
+    summary = result["summary"]
+    print(f"# Pemeriksaan Kasus Bisnis - {e2e['title']}")
+    print()
+    print(result["scope"])
+    print()
+    print(
+        f"PRD diperiksa: `{summary['document_count']}`; PRD dengan kandidat: "
+        f"`{summary['documents_with_candidates']}`; total kandidat: "
+        f"`{summary['gap_candidate_count']}`."
+    )
+    print()
+    print("| Urutan | Dokumen | Kandidat | Area yang perlu ditinjau |")
+    print("|---:|---|---:|---|")
+    for document in result["documents"]:
+        candidates = [
+            BUSINESS_CASE_LABELS.get(
+                family["context_family"], family["context_family"]
+            )
+            for family in document["families"]
+            if family["status"] == "CONTEXT_GAP_CANDIDATE"
+        ]
+        if document["inventory_case_candidate_count"]:
+            candidates.append("Kasus alternatif perlu ditinjau")
+        if document["explicit_gap_markers"]:
+            candidates.append("Ada penanda belum selesai")
+        print(
+            f"| {document['worklist_order']} | {markdown_escape(document['title'])} | "
+            f"{document['business_case_candidate_count']} | "
+            f"{markdown_escape(', '.join(candidates)) or '-'} |"
+        )
+    print()
+    print(result["warning"])
+
+
+def print_markdown(result: dict[str, Any]) -> None:
+    mode = result["scan_mode"]
+    if mode == "MAIN_FLOW_E2E":
+        print_main_flow_markdown(result)
+    elif mode == "BUSINESS_CASES_DOCUMENT":
+        print_business_case_document_markdown(result)
+    elif mode == "BUSINESS_CASES_E2E":
+        print_business_case_e2e_markdown(result)
+    else:
+        raise GapScanError(f"Unsupported scan mode: {mode}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Read-only Neurovi E2E and PRD context gap scanner")
+    parser = argparse.ArgumentParser(
+        description="Read-only Neurovi main-flow and business-case scanner"
+    )
     parser.add_argument("--repo", type=Path, default=default_repo())
     parser.add_argument("--json", action="store_true")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("--e2e", help="E2E code or name")
-    group.add_argument("--document", help="Document ID or name")
+    subparsers = parser.add_subparsers(dest="scanner", required=True)
+
+    main_flow = subparsers.add_parser(
+        "main-flow", help="Scan continuity of one E2E main business flow"
+    )
+    main_flow.add_argument("--e2e", required=True, help="E2E code or name")
+
+    business_cases = subparsers.add_parser(
+        "business-cases", help="Scan detailed business cases in one PRD or E2E"
+    )
+    target = business_cases.add_mutually_exclusive_group(required=True)
+    target.add_argument("--document", help="Document ID or name")
+    target.add_argument("--e2e", help="E2E code or name")
     return parser
 
 
@@ -652,12 +818,12 @@ def main() -> int:
     args = build_parser().parse_args()
     repo = args.repo.resolve()
     try:
-        if args.e2e:
-            result = scan_e2e(repo, args.e2e)
+        if args.scanner == "main-flow":
+            result = scan_main_flow(repo, args.e2e)
         elif args.document:
-            result = scan_document(repo, args.document)
+            result = scan_business_cases_document(repo, args.document)
         else:
-            result = scan_all_e2e(repo)
+            result = scan_business_cases_e2e(repo, args.e2e)
     except (GapScanError, json.JSONDecodeError, OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

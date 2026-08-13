@@ -3,147 +3,176 @@ from __future__ import annotations
 
 import argparse
 import csv
-import html
+import hashlib
 import json
 import re
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
-PROCESS_FIELDS = [
-    "process_code",
-    "title",
-    "category",
-    "scenario",
-    "start_event",
-    "end_event",
-    "owner",
-    "status",
-    "origin",
-    "source_process_id",
-    "source_flow",
-    "source_flow_document_id",
-    "stage_count",
-    "membership_count",
-    "notes",
-]
-
-STAGE_FIELDS = [
-    "process_code",
-    "stage_order",
-    "stage_code",
-    "stage_title",
-    "entry_condition",
-    "output",
-    "stage_status",
-    "source_prd_id",
-    "source_role",
-    "origin",
-    "notes",
-]
-
-MEMBERSHIP_FIELDS = [
-    "process_code",
-    "stage_code",
-    "document_id",
-    "document_title",
-    "source_path",
-    "source_group",
-    "catalog_id",
-    "membership_role",
-    "membership_status",
-    "basis",
-    "notes",
-]
-
-FLOW_FIELDS = [
-    "flow_id",
-    "flow_class",
-    "e2e_code",
-    "title",
-    "macro_group",
-    "source_path",
-    "document_id",
-    "node_count",
-    "edge_count",
-    "canonical_flow_id",
-    "explicit_process_ids",
-]
-
-E2E_DOMAIN_FIELDS = [
-    "e2e_code",
-    "title",
-    "macro_group",
-    "status",
-    "origin",
-    "flow_id",
-    "flow_document_id",
-    "source_path",
-    "node_count",
-    "edge_count",
-    "explicit_process_ids",
-    "explicit_membership_count",
-    "manual_stage_count",
-    "manual_candidate_membership_count",
-    "candidate_match_count",
-    "notes",
-]
-
-GROUP_PREFIXES = {
-    "admisi-emr": "ADM",
-    "backoffice": "BO",
-    "governance": "GOV",
-    "integrasi": "INT",
-    "pelayanan-pendukung": "PP",
-    "pelayanan-utama": "PU",
+PRIMARY_PREFIX = "PRD/PRD Generator (.md)/"
+SUPPORTING_MARKDOWN_PATHS = {
+    PRIMARY_PREFIX + "Integrasi/Api Doc/APLICARES-KETERSEDIAAN KAMAR.md",
+    PRIMARY_PREFIX + "KONTEKS-SESI.md",
+    PRIMARY_PREFIX + "Pelayanan (.md)/ringkasan-merge-prd-rj.md",
 }
 
-INVENTORY_FLOW_CODES = {
-    "flowchart-inventory-distribusi-barang": ("E2E-INV-01", "Distribusi Barang"),
-    "flowchart-inventory-informasi-stok (1)": ("E2E-INV-02", "Informasi Stok"),
-    "flowchart-inventory-penerimaan-barang": ("E2E-INV-03", "Penerimaan Barang"),
-    "flowchart-inventory-retur-pembelian": ("E2E-INV-04", "Retur Pembelian"),
-    "flowchart-inventory-stok-opname": ("E2E-INV-05", "Stok Opname"),
+LEGACY_OUTPUTS = {
+    "by-e2e-domain.md",
+    "by-process.md",
+    "candidate-variants.csv",
+    "document-e2e-coverage.csv",
+    "e2e-domain-inventory.json",
+    "e2e-domain-register.csv",
+    "flow-document-candidates.csv",
+    "flow-edge-register.csv",
+    "flow-node-register.csv",
+    "flow-register.csv",
+    "manual-memberships.csv",
+    "manual-processes.csv",
+    "manual-stages.csv",
+    "membership-register.csv",
+    "process-inventory.json",
+    "process-register.csv",
+    "stage-register.csv",
+    "unmapped-documents.csv",
 }
+
+DOMAIN_DEFINITIONS = (
+    ("E2E-RJ", "Rawat Jalan", "pelayanan-utama", "Alur kunjungan dan pelayanan rawat jalan."),
+    ("E2E-RI", "Rawat Inap", "pelayanan-utama", "Admisi, pelayanan, perpindahan, dan keluarnya pasien rawat inap."),
+    ("E2E-IGD", "IGD", "pelayanan-utama", "Pendaftaran, asesmen, observasi, dan pelayanan gawat darurat."),
+    ("E2E-LAB", "Laboratorium", "pelayanan-penunjang", "Order, konfirmasi, pelaksanaan, dan hasil laboratorium."),
+    ("E2E-RAD", "Radiologi", "pelayanan-penunjang", "Pendaftaran, order, konfirmasi, dan hasil radiologi."),
+    ("E2E-PA", "Patologi Anatomi", "pelayanan-penunjang", "Order, konfirmasi, dan hasil patologi anatomi."),
+    ("E2E-REHAB", "Rehabilitasi Medik", "pelayanan-penunjang", "Penjadwalan, asesmen, dan pelayanan rehabilitasi medik."),
+    ("E2E-HD", "Hemodialisa", "pelayanan-penunjang", "Order, penjadwalan, asesmen, dan monitoring hemodialisa."),
+    ("E2E-IBS", "IBS dan Operasi", "pelayanan-penunjang", "Permintaan, penjadwalan, pelaksanaan, dan laporan operasi."),
+    ("E2E-GIZI", "Gizi", "pelayanan-penunjang", "Order makanan, pemakaian barang, dan pelayanan gizi."),
+    ("E2E-FARMASI", "Farmasi", "pelayanan-penunjang", "Pelayanan obat, retur, rekonsiliasi, dan pengaturan farmasi."),
+    ("E2E-TRANSFUSI", "Transfusi Darah", "pelayanan-penunjang", "Order, konfirmasi, crossmatch, dan pelayanan transfusi darah."),
+    ("E2E-VK", "VK dan Kebidanan", "pelayanan-utama", "Order tindakan dan pelayanan VK/kebidanan."),
+    ("E2E-MCU", "Medical Check Up", "pelayanan-utama", "Pendaftaran dan paket pelayanan MCU."),
+    ("E2E-AMBULANCE", "Ambulance", "pelayanan-penunjang", "Order dan konfirmasi layanan ambulance."),
+    ("E2E-JENAZAH", "Pemulasaraan Jenazah", "pelayanan-penunjang", "Pelayanan pemulasaraan jenazah."),
+    ("E2E-EMR", "Rekam Medis dan Dokumentasi Klinis", "pelayanan-lintas-domain", "Dokumentasi klinis yang digunakan lintas unit pelayanan."),
+    ("E2E-SURAT", "Administrasi Surat dan Consent", "administrasi-pasien", "Pembuatan surat, persetujuan, penolakan, dan consent."),
+    ("E2E-BILLING", "Billing dan Kasir", "administrasi-keuangan", "Tagihan, kasir, deposito, dan penerimaan kas."),
+    ("E2E-CASEMIX", "Casemix dan Klaim", "administrasi-keuangan", "Dokumen, pengajuan, penerimaan, dan rekonsiliasi klaim."),
+    ("E2E-INVENTORY", "Inventory dan Pengadaan", "backoffice", "Perencanaan, pemesanan, penerimaan, stok, dan distribusi barang."),
+    ("E2E-MASTER", "Master Data dan Access Control", "platform", "Siklus master data, konfigurasi, pengguna, role, dan akses."),
+    ("E2E-INTEGRASI", "Integrasi Eksternal", "platform", "Pertukaran data dengan BPJS, SATUSEHAT, dan sistem eksternal."),
+)
+
+DOMAIN_BY_CODE = {
+    code: {"domain_code": code, "title": title, "domain_group": group, "purpose": purpose}
+    for code, title, group, purpose in DOMAIN_DEFINITIONS
+}
+
+STAGE_ORDER = {
+    "FOUNDATION": 10,
+    "ENTRY": 20,
+    "REQUEST": 30,
+    "SCHEDULING": 40,
+    "VALIDATION": 50,
+    "WORKLIST": 60,
+    "ASSESSMENT": 70,
+    "EXECUTION": 80,
+    "OUTPUT": 90,
+    "SETTLEMENT": 100,
+    "SUPPORTING": 110,
+}
+
+DOCUMENT_INDEX_FIELDS = (
+    "content_id",
+    "representative_document_id",
+    "representative_title",
+    "representative_source_path",
+    "owner_domain_code",
+    "owner_domain_title",
+    "worklist_stage",
+    "worklist_order",
+    "assignment_status",
+    "assignment_confidence",
+    "assignment_basis",
+    "review_status",
+    "source_representation_count",
+    "source_document_ids",
+    "source_paths",
+    "incoming_relation_count",
+    "outgoing_relation_count",
+    "cross_domain_relation_count",
+)
+
+RELATION_FIELDS = (
+    "relation_id",
+    "source_content_id",
+    "source_document_id",
+    "source_title",
+    "source_domain_code",
+    "target_content_id",
+    "target_document_id",
+    "target_title",
+    "target_domain_code",
+    "relationship_type",
+    "relation_scope",
+    "trigger",
+    "input_context",
+    "output_context",
+    "status_transition",
+    "condition",
+    "evidence_reference",
+    "evidence_excerpt",
+    "evidence_class",
+    "verification_status",
+    "conflict_status",
+    "notes",
+)
+
+OVERRIDE_FIELDS = (
+    "content_id",
+    "owner_domain_code",
+    "decision_id",
+    "status",
+    "notes",
+)
+
+DUPLICATE_FIELDS = (
+    "content_id",
+    "owner_domain_code",
+    "representative_document_id",
+    "document_ids",
+    "source_paths",
+    "representation_count",
+)
 
 TOKEN_STOPWORDS = {
     "a",
     "and",
     "atau",
-    "buka",
-    "buat",
-    "cek",
     "dan",
     "data",
-    "dari",
-    "di",
     "dokumen",
+    "draft",
+    "final",
+    "fix",
     "form",
-    "input",
-    "ke",
-    "klik",
     "management",
     "manajemen",
-    "menu",
+    "md",
+    "new",
     "neurovi",
     "of",
     "pasien",
-    "pengelolaan",
     "prd",
-    "process",
     "product",
-    "proses",
     "requirement",
-    "review",
-    "simpan",
-    "status",
-    "the",
-    "untuk",
+    "rev",
+    "update",
     "v1",
     "v2",
-    "ya",
 }
 
 
@@ -151,1319 +180,822 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def read_csv(path: Path, required_fields: list[str]) -> list[dict[str, str]]:
-    if not path.is_file():
-        raise SystemExit(f"Input manual tidak ditemukan: {path}")
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        missing = [field for field in required_fields if field not in (reader.fieldnames or [])]
-        if missing:
-            raise SystemExit(f"Kolom hilang pada {path}: {', '.join(missing)}")
-        return [
-            {field: (row.get(field) or "").strip() for field in required_fields}
-            for row in reader
-            if any((row.get(field) or "").strip() for field in required_fields)
-        ]
+def write_json(path: Path, value: Any) -> None:
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
+def write_csv(path: Path, fieldnames: Iterable[str], rows: Iterable[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
 
-def markdown_cell(value: Any) -> str:
-    return str(value or "").replace("|", "\\|").replace("\n", " ")
+def normalize(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value)
+    value = value.encode("ascii", "ignore").decode("ascii").casefold()
+    return " ".join(re.findall(r"[a-z0-9]+", value))
 
 
-def parse_order(value: str, context: str) -> int:
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise SystemExit(f"stage_order tidak valid pada {context}: {value}") from exc
+def clean_title(value: str, fallback: str) -> str:
+    title = re.sub(r"\s+", " ", value or "").strip()
+    generic = normalize(title) in {
+        "product requirement document",
+        "product requirement document prd",
+        "prd",
+    }
+    if title and not generic:
+        return title
+    stem = Path(fallback).stem
+    stem = re.sub(r"^\[?fix\]?\s*", "", stem, flags=re.I)
+    stem = re.sub(r"^(?:prd[-_ ]*)+", "", stem, flags=re.I)
+    stem = re.sub(r"[-_]+", " ", stem)
+    stem = re.sub(r"\s+", " ", stem).strip()
+    return stem or title or fallback
 
 
-def mechanical_title(value: str) -> str:
-    cleaned = re.sub(r"^\d+[-_ ]*", "", value)
-    cleaned = re.sub(r"[-_]+", " ", cleaned).strip().title()
-    for source, target in {
-        "Bpjs": "BPJS",
-        "Bhp": "BHP",
-        "Cpo": "CPO",
-        "Dpjp": "DPJP",
-        "Emr": "EMR",
-        "Igd": "IGD",
-        "Mcu": "MCU",
-        "Ppi": "PPI",
-    }.items():
-        cleaned = cleaned.replace(source, target)
-    return cleaned
-
-
-def e2e_code_for_flow(source_path: str) -> tuple[str, str, str] | None:
-    grouped = re.search(r"/menu-flow/entities-grouped/([^/]+)/([^/]+)\.mmd$", source_path)
-    if grouped:
-        macro_group = grouped.group(1)
-        filename = grouped.group(2)
-        number = re.match(r"(\d+)", filename)
-        prefix = GROUP_PREFIXES.get(macro_group)
-        if not number or not prefix:
-            return None
-        return f"E2E-{prefix}-{int(number.group(1)):02d}", mechanical_title(filename), macro_group
-
-    inventory = re.search(r"/inventory \(\.md\)/flowchart inventory/([^/]+)\.mmd$", source_path)
-    if inventory and "PRD Generator (.md) - Copy/" in source_path:
-        code_title = INVENTORY_FLOW_CODES.get(inventory.group(1))
-        if code_title:
-            return code_title[0], code_title[1], "inventory-detail"
-    return None
-
-
-def flow_class(source_path: str) -> str:
-    if "/menu-flow/entities-grouped/" in source_path:
-        return "E2E_CANDIDATE"
-    if "/inventory (.md)/flowchart inventory/" in source_path:
-        if "PRD Generator (.md) - Copy/" in source_path:
-            return "E2E_CANDIDATE"
-        return "DUPLICATE_FLOW"
-    if "/menu-flow/entities/" in source_path:
-        return "REFERENCE_MAP"
-    if source_path.endswith("/menu-flow/overall-menu-flow.mmd"):
-        return "REFERENCE_MAP"
-    if source_path.endswith("/menu-flow/business-process-flows.mmd"):
-        return "REFERENCE_MAP"
-    return "REFERENCE_MAP"
-
-
-def parse_node_declarations(line: str) -> list[dict[str, Any]]:
-    openers = [
-        ("([", "])", "terminal"),
-        ("[(", ")]", "database"),
-        ("[[", "]]", "subroutine"),
-        ("{{", "}}", "hexagon"),
-        ("[", "]", "process"),
-        ("(", ")", "rounded"),
-        ("{", "}", "decision"),
-    ]
-    declarations: list[dict[str, Any]] = []
-    for match in re.finditer(r"\b([A-Za-z][A-Za-z0-9_]*)\s*", line):
-        node_id = match.group(1)
-        start = match.end()
-        for opener, closer, shape in openers:
-            if not line.startswith(opener, start):
-                continue
-            label_start = start + len(opener)
-            label_end = line.find(closer, label_start)
-            if label_end < 0:
-                continue
-            label = html.unescape(line[label_start:label_end])
-            label = re.sub(r"<br\s*/?>", " ", label, flags=re.I)
-            label = re.sub(r"\s+", " ", label).strip()
-            declarations.append(
-                {
-                    "node_id": node_id,
-                    "label": label or node_id,
-                    "shape": shape,
-                    "start": match.start(),
-                    "end": label_end + len(closer),
-                }
-            )
-            break
-    return declarations
-
-
-def parse_mermaid(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    nodes: dict[str, dict[str, Any]] = {}
-    edges: list[dict[str, Any]] = []
-
-    def ensure_node(node_id: str, line_number: int) -> None:
-        if node_id not in nodes:
-            nodes[node_id] = {
-                "node_id": node_id,
-                "node_label": node_id,
-                "node_shape": "reference",
-                "node_order": len(nodes) + 1,
-                "first_line": line_number,
-            }
-
-    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8-sig", errors="replace").splitlines(), 1):
-        line = raw_line.strip()
-        if not line or line.startswith("%%"):
+def eligible_documents(repository: Path) -> list[dict[str, Any]]:
+    catalog = read_json(repository / "catalog/document-index.json")
+    source_root = repository / "source/original"
+    rows = []
+    for item in catalog.get("documents", []):
+        source_path = str(item.get("source_path", ""))
+        if (
+            item.get("extension") != ".md"
+            or not source_path.startswith(PRIMARY_PREFIX)
+            or source_path in SUPPORTING_MARKDOWN_PATHS
+            or "/menu-flow/" in source_path
+        ):
             continue
-        declarations = parse_node_declarations(line)
-        for declaration in declarations:
-            ensure_node(declaration["node_id"], line_number)
-            nodes[declaration["node_id"]].update(
-                {
-                    "node_label": declaration["label"],
-                    "node_shape": declaration["shape"],
-                }
-            )
-        arrows = list(re.finditer(r"-->|==>|\.->", line))
-        if not arrows:
-            continue
-        source_match = re.match(r"([A-Za-z][A-Za-z0-9_]*)", line)
-        if not source_match:
-            continue
-        source_id = source_match.group(1)
-        arrow = arrows[-1]
-        target_text = line[arrow.end() :]
-        target_match = re.match(r"\s*(?:\|[^|]*\|\s*)?([A-Za-z][A-Za-z0-9_]*)", target_text)
-        if not target_match:
-            continue
-        target_id = target_match.group(1)
-        ensure_node(source_id, line_number)
-        ensure_node(target_id, line_number)
-        edge_label = ""
-        pipe_label = re.search(r"-->\|([^|]+)\|", line)
-        text_label = re.search(r"--\s+(.+?)\s+-->", line)
-        dotted_label = re.search(r"-\.\s*(.+?)\s*\.->", line)
-        if pipe_label:
-            edge_label = pipe_label.group(1).strip()
-        elif text_label:
-            edge_label = text_label.group(1).strip().strip('"')
-        elif dotted_label:
-            edge_label = dotted_label.group(1).strip().strip('"')
-        edges.append(
+        physical = source_root / source_path
+        if not physical.is_file():
+            raise SystemExit(f"Eligible original PRD is missing: {physical}")
+        rows.append(
             {
-                "edge_order": len(edges) + 1,
-                "from_node": source_id,
-                "to_node": target_id,
-                "edge_label": edge_label,
-                "source_line_number": line_number,
-                "source_line": raw_line.strip(),
+                **item,
+                "title": clean_title(str(item.get("title", "")), source_path),
+                "physical_path": physical,
+                "relative_primary_path": source_path[len(PRIMARY_PREFIX) :],
             }
         )
-    return sorted(nodes.values(), key=lambda item: item["node_order"]), edges
+    return sorted(rows, key=lambda item: item["source_path"].casefold())
 
 
-def tokenize(value: str) -> set[str]:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized.encode("ascii", "ignore").decode("ascii").casefold()
-    tokens = set(re.findall(r"[a-z0-9]+", ascii_value))
+def choose_representative(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return min(
+        rows,
+        key=lambda item: (
+            "draft" in item["source_path"].casefold(),
+            "update/" in item["source_path"].casefold(),
+            item["source_path"].count("/"),
+            len(item["source_path"]),
+            item["source_path"].casefold(),
+        ),
+    )
+
+
+def load_overrides(path: Path) -> dict[str, dict[str, str]]:
+    if not path.is_file():
+        write_csv(path, OVERRIDE_FIELDS, [])
+        return {}
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        missing = [field for field in OVERRIDE_FIELDS if field not in (reader.fieldnames or [])]
+        if missing:
+            raise SystemExit(f"manual-domain-overrides.csv is missing columns: {', '.join(missing)}")
+        overrides = {}
+        for row_number, row in enumerate(reader, start=2):
+            content_id = (row.get("content_id") or "").strip()
+            if not content_id:
+                continue
+            domain_code = (row.get("owner_domain_code") or "").strip()
+            if domain_code not in DOMAIN_BY_CODE:
+                raise SystemExit(
+                    f"manual-domain-overrides.csv row {row_number}: unknown domain {domain_code}"
+                )
+            overrides[content_id] = {field: (row.get(field) or "").strip() for field in OVERRIDE_FIELDS}
+        return overrides
+
+
+def classify_domain(document: dict[str, Any]) -> tuple[str, str, str, str]:
+    relative = document["relative_primary_path"]
+    folded = normalize(relative + " " + document["title"])
+    top = relative.split("/", 1)[0].casefold()
+
+    if top == "billing":
+        return "E2E-BILLING", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "casemix":
+        return "E2E-CASEMIX", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "farmasi":
+        return "E2E-FARMASI", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "integrasi":
+        return "E2E-INTEGRASI", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "inventory (.md)":
+        return "E2E-INVENTORY", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "emr":
+        return "E2E-EMR", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "surat penunjang":
+        return "E2E-SURAT", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "master data (.md)":
+        if "billing" in folded or "deposit" in folded or "tagihan pasien" in folded:
+            return "E2E-BILLING", "TITLE_OVERRIDES_SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+        return "E2E-MASTER", "SOURCE_FOLDER", "HIGH", "MECHANICAL_PROPOSAL"
+    if top == "pengaturan (.md)":
+        if any(token in folded for token in ("farmasi", "harga obat")):
+            return "E2E-FARMASI", "TITLE_KEYWORD", "HIGH", "MECHANICAL_PROPOSAL"
+        if "tagihan" in folded:
+            return "E2E-BILLING", "TITLE_KEYWORD", "HIGH", "MECHANICAL_PROPOSAL"
+        return "E2E-MASTER", "SOURCE_FOLDER_FALLBACK", "MEDIUM", "MECHANICAL_PROPOSAL"
+
+    rules = (
+        ("E2E-AMBULANCE", ("ambulance",)),
+        ("E2E-JENAZAH", ("pemulasaraan jenazah",)),
+        ("E2E-TRANSFUSI", ("transfusi darah", "crossmatch", "kantong darah")),
+        ("E2E-PA", ("patologi anatomi",)),
+        ("E2E-LAB", ("laboratorium",)),
+        ("E2E-RAD", ("radiologi",)),
+        ("E2E-REHAB", ("rehab medik", "rehabilitasi medik", "rehabilitas medis", "dashboard pelayanan terapi")),
+        ("E2E-HD", ("hemodialisa", "hemodialisis", "dashboard hd", "monitoring hd", "asesmen hd")),
+        ("E2E-IGD", (" igd ", "pendaftaran igd", "gawat darurat")),
+        ("E2E-VK", ("dashboard vk", "tindakan vk", " vk ", "kebidanan")),
+        ("E2E-MCU", (" mcu ", "medical check up")),
+        ("E2E-RI", ("rawat inap", "tppri", "spri", "pindah bed", "transfer internal", "titip kelas", "ubah dpjp", "discharge pasien", "ews anak", "ews dewasa", "ews neonatus", "update ketersediaan bed", "bina rohani")),
+        ("E2E-RJ", ("rawat jalan", "poliklinik", "antrian apm", "display antrean", "dashboard pelayanan integrasi", "general consent rj", "riwayat kunjungan")),
+        ("E2E-IBS", ("operasi", "anestesi", "dashboard ibs", "ruang ibs", "bedah non trauma", "bedah trauma")),
+        ("E2E-GIZI", ("gizi", "makanan pasien", "menu makanan")),
+        ("E2E-FARMASI", ("farmasi", "apotek", "obat", "alat kesehatan")),
+        ("E2E-SURAT", ("surat", "consent", "persetujuan", "penolakan", "informasi tindakan kedokteran")),
+        ("E2E-EMR", ("resume medis", "ringkasan kesehatan", "jawaban konsulan", "tindakan bhp", "data alergi", "catatan pasien")),
+    )
+    padded = f" {folded} "
+    for domain_code, keywords in rules:
+        if any(keyword in padded for keyword in keywords):
+            return domain_code, f"TITLE_KEYWORD:{next(keyword for keyword in keywords if keyword in padded).strip()}", "HIGH", "MECHANICAL_PROPOSAL"
+    return "E2E-EMR", "CLINICAL_SHARED_FALLBACK", "LOW", "REVIEW_REQUIRED"
+
+
+def classify_stage(document: dict[str, Any]) -> str:
+    value = normalize(document["relative_primary_path"] + " " + document["title"])
+    if "master data" in value or "pengaturan" in value or "konfigurasi" in value or "rbac" in value:
+        return "FOUNDATION"
+    if any(token in value for token in ("pendaftaran", "check in", "apm", "general consent")):
+        return "ENTRY"
+    if any(token in value for token in ("order", "permintaan", "spri", "pemesanan", "rencana pengadaan")):
+        return "REQUEST"
+    if any(token in value for token in ("jadwal", "penjadwalan", "waiting list")):
+        return "SCHEDULING"
+    if any(token in value for token in ("konfirmasi", "verifikasi", "rekonsiliasi")):
+        return "VALIDATION"
+    if any(token in value for token in ("dashboard", "display", "menu ", "informasi stok")):
+        return "WORKLIST"
+    if any(token in value for token in ("asesmen", "skrining", "observasi", "ews")):
+        return "ASSESSMENT"
+    if any(token in value for token in ("hasil", "resume", "discharge", "pulangkan", "surat keterangan", "laporan operasi")):
+        return "OUTPUT"
+    if any(token in value for token in ("billing", "tagihan", "kasir", "deposit", "klaim")):
+        return "SETTLEMENT"
+    if any(token in value for token in ("tindakan", "pelayanan", "monitoring", "input", "catatan", "transfer", "pindah", "retur", "distribusi", "penerimaan", "penggunaan")):
+        return "EXECUTION"
+    return "SUPPORTING"
+
+
+def source_checks(content: str) -> dict[str, str]:
+    folded = normalize(content)
+    checks = {
+        "trigger_input": ("trigger", "pemicu", "precondition", "prasyarat", "input"),
+        "sequence": ("main flow", "alur utama", "business process", "proses bisnis", "skenario"),
+        "handoff": ("dependency", "dependensi", "integrasi", "terkait", "dashboard"),
+        "output": ("output", "hasil", "tersimpan", "terbentuk"),
+        "status_transition": ("status", "transisi", "berubah menjadi"),
+        "alternate_cases": ("alternate", "alternatif", "exception", "pengecualian", "jika"),
+    }
     return {
-        token
-        for token in tokens
-        if len(token) >= 3 and token not in TOKEN_STOPWORDS and not re.fullmatch(r"v?\d+(?:\d+)?", token)
+        name: "SOURCE_CONTEXT_PRESENT" if any(token in folded for token in tokens) else "REVIEW_REQUIRED"
+        for name, tokens in checks.items()
     }
 
 
-def artifact_type(document: dict[str, Any]) -> str:
-    source_path = document.get("source_path", "").casefold()
-    extension = document.get("extension", "").casefold()
-    if extension == ".mmd":
-        return "PROCESS_FLOW"
-    if extension == ".html" or "preview" in source_path or "wireframe" in source_path:
-        return "UI_PREVIEW"
-    if extension in {".csv", ".xlsx"} or "data referensi" in source_path:
-        return "DATA_REFERENCE"
-    if extension == ".json":
-        return "CATALOG_OR_CONFIG"
-    if extension == ".ps1" or "/tools/" in source_path or "/.vscode/" in source_path:
-        return "TOOLING"
-    return "REQUIREMENT_DOCUMENT"
+def alias_tokens(value: str) -> list[str]:
+    tokens = []
+    for token in normalize(value).split():
+        if token in TOKEN_STOPWORDS or re.fullmatch(r"[a-z]?\d+[a-z]?", token):
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def document_aliases(document: dict[str, Any]) -> list[str]:
+    values = [document["title"], Path(document["relative_primary_path"]).stem]
+    aliases = set()
+    for value in values:
+        tokens = alias_tokens(value)
+        if len(tokens) >= 2:
+            alias = " ".join(tokens)
+            if len(alias) >= 12:
+                aliases.add(alias)
+        if len(tokens) >= 4:
+            aliases.add(" ".join(tokens[-4:]))
+    return sorted(aliases, key=lambda value: (-len(value.split()), -len(value), value))[:4]
+
+
+def evidence_line(document: dict[str, Any], patterns: Iterable[str]) -> tuple[str, str] | None:
+    lines = document["content"].splitlines()
+    normalized_patterns = [normalize(pattern) for pattern in patterns if normalize(pattern)]
+    for line_number, line in enumerate(lines, start=1):
+        folded = normalize(line)
+        if any(pattern in folded for pattern in normalized_patterns):
+            excerpt = re.sub(r"\s+", " ", line).strip()[:400]
+            return f"{document['source_path']}:{line_number}", excerpt
+    return None
+
+
+def evidence_line_in_range(
+    document: dict[str, Any], patterns: Iterable[str], start_line: int,
+    *, require_all: bool = False,
+) -> tuple[str, str] | None:
+    lines = document["content"].splitlines()
+    normalized_patterns = [normalize(pattern) for pattern in patterns if normalize(pattern)]
+    for line_number, line in enumerate(lines, start=1):
+        if line_number < start_line:
+            continue
+        folded = normalize(line)
+        matches = (
+            all(pattern in folded for pattern in normalized_patterns)
+            if require_all
+            else any(pattern in folded for pattern in normalized_patterns)
+        )
+        if matches:
+            excerpt = re.sub(r"\s+", " ", line).strip()[:400]
+            return f"{document['source_path']}:{line_number}", excerpt
+    return None
+
+
+def relation_id(source_content_id: str, target_content_id: str, relationship_type: str) -> str:
+    payload = f"{source_content_id}|{target_content_id}|{relationship_type}".encode("utf-8")
+    return "REL-" + hashlib.sha1(payload).hexdigest()[:12].upper()
+
+
+def relation_row(
+    source: dict[str, Any],
+    target: dict[str, Any],
+    relationship_type: str,
+    evidence: tuple[str, str],
+    *,
+    evidence_class: str,
+    verification_status: str,
+    conflict_status: str = "NO_CONFLICT_IDENTIFIED",
+    trigger: str = "",
+    input_context: str = "",
+    output_context: str = "",
+    status_transition: str = "",
+    condition: str = "",
+    notes: str = "",
+) -> dict[str, Any]:
+    return {
+        "relation_id": relation_id(source["content_id"], target["content_id"], relationship_type),
+        "source_content_id": source["content_id"],
+        "source_document_id": source["document_id"],
+        "source_title": source["title"],
+        "source_domain_code": source["owner_domain_code"],
+        "target_content_id": target["content_id"],
+        "target_document_id": target["document_id"],
+        "target_title": target["title"],
+        "target_domain_code": target["owner_domain_code"],
+        "relationship_type": relationship_type,
+        "relation_scope": "WITHIN_DOMAIN" if source["owner_domain_code"] == target["owner_domain_code"] else "CROSS_DOMAIN",
+        "trigger": trigger,
+        "input_context": input_context,
+        "output_context": output_context,
+        "status_transition": status_transition,
+        "condition": condition,
+        "evidence_reference": evidence[0],
+        "evidence_excerpt": evidence[1],
+        "evidence_class": evidence_class,
+        "verification_status": verification_status,
+        "conflict_status": conflict_status,
+        "notes": notes,
+    }
+
+
+def explicit_relations(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_suffix = {document["relative_primary_path"]: document for document in documents}
+    rules = (
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-RJ-v2.1.md",
+            "target": "Pelayanan (.md)/PRD_Transfer_Internal.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan Poli Rawat Jalan", "Transfer Internal"),
+            "min_line": 130,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Aksi Transfer Internal dari dashboard pelayanan rawat jalan.",
+            "notes": "Relasi lintas worklist tetap dicatat tanpa menduplikasi kepemilikan PRD.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-RJ-v2.1.md",
+            "target": "Pelayanan (.md)/PRD-Discharge-Pasien.md",
+            "evidence": "source",
+            "patterns": ("Pemulangan", "Status Keluar"),
+            "min_line": 155,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Aksi Pulangkan Pasien dari dashboard pelayanan rawat jalan.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-RJ-v2.1.md",
+            "target": "Pelayanan (.md)/PRD-SPRI.md",
+            "evidence": "source",
+            "patterns": ("Rawat Inap", "keterdaftaran Ranap"),
+            "min_line": 155,
+            "type": "HANDOFF_TO",
+            "output_context": "Disposisi Rawat Inap memeriksa hasil admisi; status hanya ditetapkan ketika pasien sudah terdaftar Rawat Inap.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD-SPRI.md",
+            "target": "Pelayanan (.md)/NV-176-PRD-Pendaftaran-Rawat-Inap-TPPRI-Neurovi-v2-v1.6.md",
+            "evidence": "source",
+            "patterns": ("Waiting List", "pendaftaran rawat inap"),
+            "min_line": 10,
+            "type": "PRODUCES",
+            "output_context": "SPRI yang tersimpan membentuk kandidat Waiting List untuk admisi rawat inap.",
+            "status_transition": "SPRI tersimpan menuju Waiting List.",
+        },
+        {
+            "source": "Pelayanan (.md)/NV-176-PRD-Pendaftaran-Rawat-Inap-TPPRI-Neurovi-v2-v1.6.md",
+            "target": "Pelayanan (.md)/NV-171-PRD-Dashboard-Pelayanan-Rawat-Inap-Neurovi-v2-v1.2.md",
+            "evidence": "source",
+            "patterns": ("Dashboard Pelayanan Rawat Inap", "aktivasi"),
+            "min_line": 20,
+            "type": "ACTIVATES",
+            "status_transition": "Aktivasi admisi membuat pasien masuk worklist pelayanan rawat inap.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD_Transfer_Internal.md",
+            "target": "Pelayanan (.md)/NV-176-PRD-Pendaftaran-Rawat-Inap-TPPRI-Neurovi-v2-v1.6.md",
+            "evidence": "target",
+            "patterns": ("Transfer Internal", "disimpan"),
+            "min_line": 20,
+            "type": "HANDOFF_TO",
+            "condition": "Urutan dan sifat wajib Transfer Internal perlu direkonsiliasi antar-PRD.",
+            "conflict": "CONFLICT_FOUND",
+            "notes": "Transfer Internal menyatakan form tidak lagi memblokir admisi/perpindahan, sedangkan TPPRI mengaitkan aktivasi dengan Transfer Internal yang disimpan.",
+        },
+    )
+    rows = []
+    for rule in rules:
+        source = by_suffix.get(rule["source"])
+        target = by_suffix.get(rule["target"])
+        if source is None or target is None:
+            continue
+        evidence_document = source if rule["evidence"] == "source" else target
+        evidence = evidence_line_in_range(
+            evidence_document,
+            rule["patterns"],
+            rule.get("min_line", 1),
+            require_all=rule.get("require_all", True),
+        )
+        if evidence is None:
+            continue
+        rows.append(
+            relation_row(
+                source,
+                target,
+                rule["type"],
+                evidence,
+                evidence_class="CROSS_SOURCE_FACT",
+                verification_status="SOURCE_EXPLICIT",
+                conflict_status=rule.get("conflict", "NO_CONFLICT_IDENTIFIED"),
+                trigger=rule.get("trigger", ""),
+                input_context=rule.get("input_context", ""),
+                output_context=rule.get("output_context", ""),
+                status_transition=rule.get("status_transition", ""),
+                condition=rule.get("condition", ""),
+                notes=rule.get("notes", ""),
+            )
+        )
+    return rows
+
+
+def mechanical_relations(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    aliases = {document["content_id"]: document_aliases(document) for document in documents}
+    rows = []
+    seen_pairs = set()
+    for source in documents:
+        content = normalize(source["content"])
+        matches = []
+        for target in documents:
+            if source["content_id"] == target["content_id"]:
+                continue
+            alias = next((value for value in aliases[target["content_id"]] if value in content), None)
+            if alias is None:
+                continue
+            evidence = evidence_line(source, (alias,))
+            if evidence is not None:
+                matches.append((len(alias.split()), len(alias), target, alias, evidence))
+        for _, _, target, alias, evidence in sorted(matches, reverse=True, key=lambda item: (item[0], item[1]))[:30]:
+            pair = (source["content_id"], target["content_id"])
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            rows.append(
+                relation_row(
+                    source,
+                    target,
+                    "REFERENCES",
+                    evidence,
+                    evidence_class="MECHANICAL_CANDIDATE",
+                    verification_status="REVIEW_REQUIRED",
+                    notes=f"Nama dokumen/kapabilitas target terdeteksi secara literal: {alias}",
+                )
+            )
+    return rows
+
+
+def build(repository: Path, target: Path) -> dict[str, Any]:
+    target.mkdir(parents=True, exist_ok=True)
+    for filename in LEGACY_OUTPUTS:
+        legacy = target / filename
+        if legacy.is_file():
+            legacy.unlink()
+
+    overrides = load_overrides(target / "manual-domain-overrides.csv")
+    eligible = eligible_documents(repository)
+    grouped: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for document in eligible:
+        grouped[document["content_id"]].append(document)
+
+    unique_documents = []
+    for content_id, representations in grouped.items():
+        representative = dict(choose_representative(representations))
+        representative["content"] = representative["physical_path"].read_text(
+            encoding="utf-8-sig", errors="replace"
+        )
+        override = overrides.get(content_id)
+        if override:
+            domain_code = override["owner_domain_code"]
+            basis = f"USER_OVERRIDE:{override.get('decision_id') or 'UNVERSIONED'}"
+            confidence = "CONFIRMED"
+            assignment_status = override.get("status") or "USER_CONFIRMED"
+            review_status = "CONFIRMED"
+        else:
+            domain_code, basis, confidence, assignment_status = classify_domain(representative)
+            review_status = "REVIEW_REQUIRED" if confidence == "LOW" else "UNCONFIRMED"
+        representative.update(
+            {
+                "owner_domain_code": domain_code,
+                "owner_domain_title": DOMAIN_BY_CODE[domain_code]["title"],
+                "assignment_basis": basis,
+                "assignment_confidence": confidence,
+                "assignment_status": assignment_status,
+                "review_status": review_status,
+                "worklist_stage": classify_stage(representative),
+                "source_checks": source_checks(representative["content"]),
+                "representations": sorted(
+                    (
+                        {
+                            "document_id": item["document_id"],
+                            "source_path": item["source_path"],
+                            "title": item["title"],
+                            "sha256": item["sha256"],
+                        }
+                        for item in representations
+                    ),
+                    key=lambda item: item["source_path"].casefold(),
+                ),
+            }
+        )
+        unique_documents.append(representative)
+
+    unique_documents.sort(
+        key=lambda item: (
+            item["owner_domain_code"],
+            STAGE_ORDER[item["worklist_stage"]],
+            item["title"].casefold(),
+            item["source_path"].casefold(),
+        )
+    )
+    order_by_domain: Counter[str] = Counter()
+    for document in unique_documents:
+        order_by_domain[document["owner_domain_code"]] += 1
+        document["worklist_order"] = order_by_domain[document["owner_domain_code"]]
+
+    relation_map = {
+        row["relation_id"]: row
+        for row in mechanical_relations(unique_documents) + explicit_relations(unique_documents)
+    }
+    relations = sorted(
+        relation_map.values(),
+        key=lambda row: (
+            row["source_domain_code"],
+            row["source_title"].casefold(),
+            row["target_title"].casefold(),
+            row["relationship_type"],
+        ),
+    )
+
+    incoming: Counter[str] = Counter()
+    outgoing: Counter[str] = Counter()
+    cross_domain: Counter[str] = Counter()
+    incoming_ids: defaultdict[str, list[str]] = defaultdict(list)
+    outgoing_ids: defaultdict[str, list[str]] = defaultdict(list)
+    for relation in relations:
+        outgoing[relation["source_content_id"]] += 1
+        incoming[relation["target_content_id"]] += 1
+        outgoing_ids[relation["source_content_id"]].append(relation["relation_id"])
+        incoming_ids[relation["target_content_id"]].append(relation["relation_id"])
+        if relation["relation_scope"] == "CROSS_DOMAIN":
+            cross_domain[relation["source_content_id"]] += 1
+            cross_domain[relation["target_content_id"]] += 1
+
+    domain_documents: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    document_rows = []
+    duplicate_rows = []
+    for document in unique_documents:
+        representations = document["representations"]
+        domain_documents[document["owner_domain_code"]].append(
+            {
+                "worklist_order": document["worklist_order"],
+                "worklist_stage": document["worklist_stage"],
+                "content_id": document["content_id"],
+                "document_id": document["document_id"],
+                "title": document["title"],
+                "source_path": document["source_path"],
+                "source_representations": representations,
+                "assignment_status": document["assignment_status"],
+                "assignment_confidence": document["assignment_confidence"],
+                "assignment_basis": document["assignment_basis"],
+                "review_status": document["review_status"],
+                "flow_checks": document["source_checks"],
+                "incoming_relation_ids": incoming_ids[document["content_id"]],
+                "outgoing_relation_ids": outgoing_ids[document["content_id"]],
+            }
+        )
+        document_rows.append(
+            {
+                "content_id": document["content_id"],
+                "representative_document_id": document["document_id"],
+                "representative_title": document["title"],
+                "representative_source_path": document["source_path"],
+                "owner_domain_code": document["owner_domain_code"],
+                "owner_domain_title": document["owner_domain_title"],
+                "worklist_stage": document["worklist_stage"],
+                "worklist_order": document["worklist_order"],
+                "assignment_status": document["assignment_status"],
+                "assignment_confidence": document["assignment_confidence"],
+                "assignment_basis": document["assignment_basis"],
+                "review_status": document["review_status"],
+                "source_representation_count": len(representations),
+                "source_document_ids": "|".join(item["document_id"] for item in representations),
+                "source_paths": "|".join(item["source_path"] for item in representations),
+                "incoming_relation_count": incoming[document["content_id"]],
+                "outgoing_relation_count": outgoing[document["content_id"]],
+                "cross_domain_relation_count": cross_domain[document["content_id"]],
+            }
+        )
+        if len(representations) > 1:
+            duplicate_rows.append(
+                {
+                    "content_id": document["content_id"],
+                    "owner_domain_code": document["owner_domain_code"],
+                    "representative_document_id": document["document_id"],
+                    "document_ids": "|".join(item["document_id"] for item in representations),
+                    "source_paths": "|".join(item["source_path"] for item in representations),
+                    "representation_count": len(representations),
+                }
+            )
+
+    domain_payloads = []
+    for code, definition in DOMAIN_BY_CODE.items():
+        documents = domain_documents.get(code, [])
+        if not documents:
+            continue
+        relation_ids = sorted(
+            relation["relation_id"]
+            for relation in relations
+            if relation["source_domain_code"] == code or relation["target_domain_code"] == code
+        )
+        domain_payloads.append(
+            {
+                "e2e_code": code,
+                **definition,
+                "status": "DOMAIN_WORKLIST_PROPOSAL",
+                "origin": "ELIGIBLE_ORIGINAL_PRD",
+                "document_count": len(documents),
+                "duplicate_representation_count": sum(
+                    len(item["source_representations"]) - 1 for item in documents
+                ),
+                "review_required_count": sum(
+                    item["review_status"] == "REVIEW_REQUIRED" for item in documents
+                ),
+                "relation_count": len(relation_ids),
+                "cross_domain_relation_count": sum(
+                    relation["relation_scope"] == "CROSS_DOMAIN"
+                    and (relation["source_domain_code"] == code or relation["target_domain_code"] == code)
+                    for relation in relations
+                ),
+                "documents": documents,
+                "relation_ids": relation_ids,
+            }
+        )
+
+    domain_register_rows = [
+        {
+            "domain_code": domain["domain_code"],
+            "title": domain["title"],
+            "domain_group": domain["domain_group"],
+            "status": domain["status"],
+            "document_count": domain["document_count"],
+            "relation_count": domain["relation_count"],
+            "cross_domain_relation_count": domain["cross_domain_relation_count"],
+            "review_required_count": domain["review_required_count"],
+            "purpose": domain["purpose"],
+        }
+        for domain in domain_payloads
+    ]
+
+    assignment_counts = Counter(item["owner_domain_code"] for item in unique_documents)
+    inventory_seed = "\n".join(
+        f"{item['content_id']}|{item['owner_domain_code']}|{item['worklist_order']}"
+        for item in unique_documents
+    )
+    inventory_version = hashlib.sha256(inventory_seed.encode("utf-8")).hexdigest()[:16]
+    payload = {
+        "schema_version": 2,
+        "inventory_type": "E2E_DOMAIN_WORKLIST",
+        "inventory_version": inventory_version,
+        "authority": "MECHANICAL_PROPOSAL_WITH_SOURCE_TRACE",
+        "source_policy": {
+            "primary_source_root": "source/original/" + PRIMARY_PREFIX.rstrip("/"),
+            "eligible_extension": ".md",
+            "excluded_supporting_markdown": sorted(SUPPORTING_MARKDOWN_PATHS),
+            "supporting_sources_role": "REASONING_ONLY",
+            "mermaid_role": "REASONING_ONLY_NOT_INVENTORY",
+        },
+        "eligible_file_count": len(eligible),
+        "unique_prd_count": len(unique_documents),
+        "assigned_unique_prd_count": len(unique_documents),
+        "unassigned_unique_prd_count": 0,
+        "duplicate_representation_count": len(eligible) - len(unique_documents),
+        "domain_count": len(domain_payloads),
+        "relation_count": len(relations),
+        "cross_domain_relation_count": sum(row["relation_scope"] == "CROSS_DOMAIN" for row in relations),
+        "conflict_relation_count": sum(row["conflict_status"] == "CONFLICT_FOUND" for row in relations),
+        "assignment_counts": dict(sorted(assignment_counts.items())),
+        "domains": domain_payloads,
+        "relations": relations,
+    }
+
+    if len(eligible) != 212 or len(unique_documents) != 209:
+        raise SystemExit(
+            "Eligible PRD invariant failed: "
+            f"files={len(eligible)} expected=212, unique={len(unique_documents)} expected=209"
+        )
+    if sum(assignment_counts.values()) != len(unique_documents):
+        raise SystemExit("Owner-domain assignment invariant failed")
+    if any(row["owner_domain_code"] not in DOMAIN_BY_CODE for row in document_rows):
+        raise SystemExit("Unknown owner domain detected")
+
+    write_json(target / "domain-worklist.json", payload)
+    write_csv(target / "document-domain-index.csv", DOCUMENT_INDEX_FIELDS, document_rows)
+    write_csv(target / "document-relation-index.csv", RELATION_FIELDS, relations)
+    write_csv(target / "duplicate-representations.csv", DUPLICATE_FIELDS, duplicate_rows)
+    write_csv(
+        target / "domain-register.csv",
+        (
+            "domain_code",
+            "title",
+            "domain_group",
+            "status",
+            "document_count",
+            "relation_count",
+            "cross_domain_relation_count",
+            "review_required_count",
+            "purpose",
+        ),
+        domain_register_rows,
+    )
+
+    markdown = [
+        "# E2E Domain Worklist",
+        "",
+        "> This is a flow-checking worklist. Owner-domain assignment is unique; cross-domain context is represented by relations, not duplicate ownership.",
+        "",
+        f"- Eligible Markdown PRD files: `{len(eligible)}`",
+        f"- Unique PRDs: `{len(unique_documents)}`",
+        f"- Assigned unique PRDs: `{len(unique_documents)}`",
+        "- Unassigned unique PRDs: `0`",
+        f"- Domains: `{len(domain_payloads)}`",
+        f"- Relations: `{len(relations)}`",
+        f"- Cross-domain relations: `{payload['cross_domain_relation_count']}`",
+        "",
+    ]
+    for domain in domain_payloads:
+        markdown.extend(
+            [
+                f"## {domain['domain_code']} - {domain['title']}",
+                "",
+                domain["purpose"],
+                "",
+            ]
+        )
+        for item in domain["documents"]:
+            checks = ", ".join(
+                name for name, status in item["flow_checks"].items() if status == "REVIEW_REQUIRED"
+            ) or "none"
+            markdown.append(
+                f"{item['worklist_order']}. [{item['worklist_stage']}] {item['title']} "
+                f"(`{item['document_id']}`, `{item['content_id']}`) - review: {checks}"
+            )
+        markdown.append("")
+    (target / "domain-worklist.md").write_text("\n".join(markdown).rstrip() + "\n", encoding="utf-8")
+
+    readme = f"""# E2E Domain Worklist Inventory
+
+Inventaris ini adalah satu-satunya inventaris E2E aktif. Tujuannya adalah menjadi worklist pemeriksaan kesinambungan flow, bukan klasifikasi folder dan bukan salinan flow Mermaid.
+
+## Kebijakan sumber
+
+- Sumber utama hanya file `.md` di `source/original/{PRIMARY_PREFIX.rstrip('/')}/`.
+- Tiga artefak Markdown penunjang yang tercantum pada manifest tidak menjadi PRD utama.
+- Mermaid, Graphify, PDF, DOCX, folder Copy, dan sumber lain hanya boleh membantu reasoning/discovery.
+- Setiap `content_id` memiliki tepat satu owner domain.
+- PRD yang dipakai lintas domain tetap dimiliki satu domain dan dihubungkan melalui `document-relation-index.csv`.
+- Generator gagal bila jumlah PRD unik yang belum memiliki domain lebih dari nol.
+
+## Berkas aktif
+
+- `domain-worklist.json`: inventaris machine-readable yang authoritative.
+- `domain-worklist.md`: tampilan worklist untuk manusia.
+- `domain-register.csv`: ringkasan domain.
+- `document-domain-index.csv`: tepat satu baris per PRD unik beserta owner domain.
+- `document-relation-index.csv`: relasi dalam dan lintas domain beserta bukti.
+- `duplicate-representations.csv`: representasi file identik yang berbagi satu owner.
+- `manual-domain-overrides.csv`: keputusan domain eksplisit; isi hanya dengan decision ID.
+- `inventory-manifest.json`: invariant, input, dan output build.
+
+## Status bukti
+
+Assignment tanpa decision ID adalah `MECHANICAL_PROPOSAL`. Relasi `SOURCE_EXPLICIT` memiliki kutipan dari PRD eligible, sedangkan `REVIEW_REQUIRED` adalah kandidat mekanis. Konflik tetap dicatat dan tidak diselesaikan otomatis.
+"""
+    (target / "README.md").write_text(readme, encoding="utf-8")
+
+    manifest = {
+        "schema_version": 2,
+        "inventory_type": "E2E_DOMAIN_WORKLIST",
+        "inventory_version": inventory_version,
+        "inputs": [
+            "catalog/document-index.json",
+            "source/original/" + PRIMARY_PREFIX.rstrip("/"),
+            "reconciliation/e2e-inventory/manual-domain-overrides.csv",
+        ],
+        "outputs": [
+            "reconciliation/e2e-inventory/README.md",
+            "reconciliation/e2e-inventory/domain-register.csv",
+            "reconciliation/e2e-inventory/domain-worklist.json",
+            "reconciliation/e2e-inventory/domain-worklist.md",
+            "reconciliation/e2e-inventory/document-domain-index.csv",
+            "reconciliation/e2e-inventory/document-relation-index.csv",
+            "reconciliation/e2e-inventory/duplicate-representations.csv",
+        ],
+        "invariants": {
+            "eligible_file_count": len(eligible),
+            "unique_prd_count": len(unique_documents),
+            "assigned_unique_prd_count": len(unique_documents),
+            "unassigned_unique_prd_count": 0,
+            "single_owner_per_content_id": True,
+        },
+        "legacy_inventory_policy": "REMOVED_NOT_GENERATED",
+    }
+    write_json(target / "inventory-manifest.json", manifest)
+    return payload
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build a controlled end-to-end process inventory.")
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--target", type=Path, default=Path("reconciliation/e2e-inventory"))
+    parser = argparse.ArgumentParser(description="Build the Neurovi E2E domain worklist inventory.")
+    parser.add_argument("--repo", type=Path, default=Path("neurovi-prd"))
+    parser.add_argument("--target", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     repository = args.repo.resolve()
-    target = (repository / args.target).resolve() if not args.target.is_absolute() else args.target.resolve()
-    try:
-        target.relative_to(repository)
-    except ValueError as exc:
-        raise SystemExit("Target inventaris E2E harus berada di dalam repository") from exc
-
-    blocked_roots = [
-        repository / "source/original",
-        repository / "documents",
-        repository / "catalog",
-        repository / "indexes",
-        repository / "processes",
-        repository / "graph",
-        repository / "graphify-out",
-        repository / "docs",
-    ]
-    for blocked in blocked_roots:
-        try:
-            target.relative_to(blocked.resolve())
-        except ValueError:
-            continue
-        raise SystemExit(f"Target inventaris E2E tidak boleh berada di area sumber/generated: {blocked}")
-
-    target.mkdir(parents=True, exist_ok=True)
-    manual_processes = read_csv(
-        target / "manual-processes.csv",
-        ["process_code", "title", "start_event", "end_event", "owner", "status", "source_basis", "notes"],
-    )
-    manual_stages = read_csv(
-        target / "manual-stages.csv",
-        [
-            "process_code",
-            "stage_order",
-            "stage_code",
-            "stage_title",
-            "entry_condition",
-            "output",
-            "stage_status",
-            "notes",
-        ],
-    )
-    manual_memberships = read_csv(
-        target / "manual-memberships.csv",
-        [
-            "process_code",
-            "stage_code",
-            "document_id",
-            "membership_role",
-            "membership_status",
-            "basis",
-            "notes",
-        ],
-    )
-
-    document_data = read_json(repository / "catalog/document-index.json")
-    process_data = read_json(repository / "catalog/process-index.json")
-    catalog_data = read_json(repository / "catalog/source-domain-feature-index.json")
-    correlation_data = read_json(repository / "catalog/correlation-index.json")
-    source_inventory = read_json(repository / "reconciliation/inventory/document-register.json")
-
-    documents = {document["document_id"]: document for document in document_data.get("documents", [])}
-    source_rows = {row["document_id"]: row for row in source_inventory.get("documents", [])}
-    catalog_by_document = {
-        entry["document_id"]: entry
-        for entry in catalog_data.get("entries", [])
-        if entry.get("document_id")
-    }
-
-    explicit_processes_by_flow: defaultdict[str, list[str]] = defaultdict(list)
-    for source_process in process_data.get("paths", []):
-        if source_process.get("source_flow_source_path"):
-            explicit_processes_by_flow[source_process["source_flow_source_path"]].append(source_process["id"])
-
-    flow_rows: list[dict[str, Any]] = []
-    flow_nodes: list[dict[str, Any]] = []
-    flow_edges: list[dict[str, Any]] = []
-    flow_structures: dict[str, dict[str, Any]] = {}
-    copy_inventory_flow_by_sha: dict[str, str] = {}
-
-    for flow in process_data.get("mermaid_flows", []):
-        source_path = flow["source_path"]
-        classification = flow_class(source_path)
-        code_data = e2e_code_for_flow(source_path)
-        e2e_code = code_data[0] if code_data else ""
-        title = code_data[1] if code_data else mechanical_title(Path(source_path).stem)
-        macro_group = code_data[2] if code_data else ""
-        source_file = repository / "source/original" / source_path
-        nodes, edges = parse_mermaid(source_file)
-        flow_structures[flow["id"]] = {"nodes": nodes, "edges": edges}
-        document = documents.get(flow.get("document_id", ""), {})
-        if classification == "E2E_CANDIDATE" and "/inventory (.md)/flowchart inventory/" in source_path:
-            copy_inventory_flow_by_sha[document.get("sha256", "")] = flow["id"]
-        flow_rows.append(
+    target = args.target.resolve() if args.target else repository / "reconciliation/e2e-inventory"
+    payload = build(repository, target)
+    print(
+        json.dumps(
             {
-                "flow_id": flow["id"],
-                "flow_class": classification,
-                "e2e_code": e2e_code,
-                "title": title,
-                "macro_group": macro_group,
-                "source_path": source_path,
-                "document_id": flow.get("document_id", ""),
-                "node_count": len(nodes),
-                "edge_count": len(edges),
-                "canonical_flow_id": "",
-                "explicit_process_ids": "|".join(sorted(explicit_processes_by_flow.get(source_path, []))),
-            }
+                "status": "BUILT",
+                "eligible_file_count": payload["eligible_file_count"],
+                "unique_prd_count": payload["unique_prd_count"],
+                "assigned_unique_prd_count": payload["assigned_unique_prd_count"],
+                "unassigned_unique_prd_count": payload["unassigned_unique_prd_count"],
+                "domain_count": payload["domain_count"],
+                "relation_count": payload["relation_count"],
+                "cross_domain_relation_count": payload["cross_domain_relation_count"],
+            },
+            ensure_ascii=False,
+            indent=2,
         )
-
-    for flow_row in flow_rows:
-        if flow_row["flow_class"] != "DUPLICATE_FLOW":
-            continue
-        document = documents.get(flow_row["document_id"], {})
-        flow_row["canonical_flow_id"] = copy_inventory_flow_by_sha.get(document.get("sha256", ""), "")
-
-    for flow_row in flow_rows:
-        structure = flow_structures[flow_row["flow_id"]]
-        for node in structure["nodes"]:
-            flow_nodes.append(
-                {
-                    "flow_id": flow_row["flow_id"],
-                    "e2e_code": flow_row["e2e_code"],
-                    "flow_class": flow_row["flow_class"],
-                    **node,
-                }
-            )
-        for edge in structure["edges"]:
-            flow_edges.append(
-                {
-                    "flow_id": flow_row["flow_id"],
-                    "e2e_code": flow_row["e2e_code"],
-                    "flow_class": flow_row["flow_class"],
-                    **edge,
-                }
-            )
-
-    processes: dict[str, dict[str, Any]] = {}
-    stages: dict[tuple[str, str], dict[str, Any]] = {}
-    memberships: dict[tuple[str, str, str], dict[str, Any]] = {}
-
-    for source_process in process_data.get("paths", []):
-        process_code = source_process["id"]
-        if process_code in processes:
-            raise SystemExit(f"Process code sumber duplikat: {process_code}")
-        processes[process_code] = {
-            "process_code": process_code,
-            "title": source_process.get("name", process_code),
-            "category": source_process.get("category", ""),
-            "scenario": source_process.get("scenario", ""),
-            "start_event": "",
-            "end_event": "",
-            "owner": "",
-            "status": "SOURCE_EXPLICIT",
-            "origin": "prd-paths-v2.json",
-            "source_process_id": process_code,
-            "source_flow": source_process.get("source_flow", ""),
-            "source_flow_document_id": source_process.get("source_flow_document_id", ""),
-            "notes": "",
-        }
-        for step in source_process.get("steps", []):
-            position = int(step.get("position", 0))
-            stage_code = f"S{position:02d}"
-            stage_key = (process_code, stage_code)
-            if stage_key in stages:
-                raise SystemExit(f"Tahap sumber duplikat: {process_code}/{stage_code}")
-            stages[stage_key] = {
-                "process_code": process_code,
-                "stage_order": position * 10,
-                "stage_code": stage_code,
-                "stage_title": step.get("catalog_name") or step.get("prd_id") or stage_code,
-                "entry_condition": "",
-                "output": "",
-                "stage_status": "SOURCE_EXPLICIT",
-                "source_prd_id": step.get("prd_id", ""),
-                "source_role": step.get("role", ""),
-                "origin": "prd-paths-v2.json",
-                "notes": step.get("note", ""),
-            }
-            if step.get("document_id"):
-                membership_key = (process_code, stage_code, step["document_id"])
-                memberships[membership_key] = {
-                    "process_code": process_code,
-                    "stage_code": stage_code,
-                    "document_id": step["document_id"],
-                    "membership_role": (step.get("role") or "UNSPECIFIED").upper(),
-                    "membership_status": "SOURCE_EXPLICIT",
-                    "basis": "prd-paths-v2.json",
-                    "notes": step.get("note", ""),
-                }
-
-    for row_number, item in enumerate(manual_processes, 2):
-        process_code = item["process_code"]
-        if not process_code:
-            raise SystemExit(f"manual-processes.csv baris {row_number}: process_code wajib")
-        if process_code in processes:
-            raise SystemExit(f"manual-processes.csv tidak boleh menimpa proses sumber: {process_code}")
-        processes[process_code] = {
-            "process_code": process_code,
-            "title": item["title"],
-            "category": "",
-            "scenario": "",
-            "start_event": item["start_event"],
-            "end_event": item["end_event"],
-            "owner": item["owner"],
-            "status": item["status"] or "DRAFT",
-            "origin": item["source_basis"] or "manual",
-            "source_process_id": "",
-            "source_flow": "",
-            "source_flow_document_id": "",
-            "notes": item["notes"],
-        }
-
-    for row_number, item in enumerate(manual_stages, 2):
-        process_code = item["process_code"]
-        stage_code = item["stage_code"]
-        if process_code not in processes:
-            raise SystemExit(f"manual-stages.csv baris {row_number}: proses tidak dikenal {process_code}")
-        stage_key = (process_code, stage_code)
-        if stage_key in stages:
-            raise SystemExit(f"manual-stages.csv tidak boleh menimpa tahap sumber: {process_code}/{stage_code}")
-        stages[stage_key] = {
-            "process_code": process_code,
-            "stage_order": parse_order(item["stage_order"], f"manual-stages.csv baris {row_number}"),
-            "stage_code": stage_code,
-            "stage_title": item["stage_title"],
-            "entry_condition": item["entry_condition"],
-            "output": item["output"],
-            "stage_status": item["stage_status"] or "DRAFT",
-            "source_prd_id": "",
-            "source_role": "",
-            "origin": "manual",
-            "notes": item["notes"],
-        }
-
-    manual_membership_keys: set[tuple[str, str, str]] = set()
-    for row_number, item in enumerate(manual_memberships, 2):
-        process_code = item["process_code"]
-        stage_code = item["stage_code"]
-        document_id = item["document_id"]
-        if (process_code, stage_code) not in stages:
-            raise SystemExit(
-                f"manual-memberships.csv baris {row_number}: tahap tidak dikenal {process_code}/{stage_code}"
-            )
-        if document_id not in documents:
-            raise SystemExit(f"manual-memberships.csv baris {row_number}: document_id tidak dikenal {document_id}")
-        membership_key = (process_code, stage_code, document_id)
-        if membership_key in memberships:
-            raise SystemExit(
-                f"manual-memberships.csv tidak boleh menimpa membership sumber: {process_code}/{stage_code}/{document_id}"
-            )
-        memberships[membership_key] = {
-            "process_code": process_code,
-            "stage_code": stage_code,
-            "document_id": document_id,
-            "membership_role": item["membership_role"] or "UNCONFIRMED",
-            "membership_status": item["membership_status"] or "CANDIDATE",
-            "basis": item["basis"] or "manual",
-            "notes": item["notes"],
-        }
-        manual_membership_keys.add(membership_key)
-
-    memberships_by_stage: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    membership_rows: list[dict[str, Any]] = []
-    for membership in memberships.values():
-        document = documents[membership["document_id"]]
-        source_row = source_rows.get(membership["document_id"], {})
-        catalog_entry = catalog_by_document.get(membership["document_id"], {})
-        row = {
-            **membership,
-            "document_title": document.get("title", ""),
-            "source_path": document.get("source_path", ""),
-            "source_group": source_row.get("inventory_domain", ""),
-            "catalog_id": catalog_entry.get("id", ""),
-        }
-        membership_rows.append(row)
-        memberships_by_stage[(membership["process_code"], membership["stage_code"])].append(row)
-
-    membership_rows.sort(key=lambda item: (item["process_code"], item["stage_code"], item["source_path"]))
-    stage_rows = sorted(stages.values(), key=lambda item: (item["process_code"], item["stage_order"], item["stage_code"]))
-
-    stage_count_by_process: defaultdict[str, int] = defaultdict(int)
-    membership_count_by_process: defaultdict[str, int] = defaultdict(int)
-    for stage in stage_rows:
-        stage_count_by_process[stage["process_code"]] += 1
-    for membership in membership_rows:
-        membership_count_by_process[membership["process_code"]] += 1
-
-    process_rows: list[dict[str, Any]] = []
-    for process in sorted(processes.values(), key=lambda item: item["process_code"]):
-        process_rows.append(
-            {
-                **process,
-                "stage_count": stage_count_by_process[process["process_code"]],
-                "membership_count": membership_count_by_process[process["process_code"]],
-            }
-        )
-
-    exact_groups: defaultdict[str, set[str]] = defaultdict(set)
-    for document in documents.values():
-        exact_groups[document["sha256"]].add(document["document_id"])
-    counterparts: defaultdict[str, set[str]] = defaultdict(set)
-    for relation in correlation_data.get("relations", []):
-        if relation.get("type") != "generator-tree-counterpart":
-            continue
-        left = relation.get("from", "")
-        right = relation.get("to", "")
-        if left.startswith("DOC-") and right.startswith("DOC-"):
-            counterparts[left].add(right)
-            counterparts[right].add(left)
-
-    variant_rows: list[dict[str, Any]] = []
-    for membership_key in sorted(manual_membership_keys):
-        membership = memberships[membership_key]
-        selected_id = membership["document_id"]
-        selected = documents[selected_id]
-        variant_ids = set(exact_groups[selected["sha256"]]) | counterparts.get(selected_id, set()) | {selected_id}
-        for variant_id in sorted(variant_ids):
-            variant = documents[variant_id]
-            bases = []
-            if variant_id == selected_id:
-                bases.append("selected-candidate")
-            if variant["sha256"] == selected["sha256"] and variant_id != selected_id:
-                bases.append("same-binary-content")
-            if variant_id in counterparts.get(selected_id, set()):
-                bases.append("generator-tree-counterpart")
-            variant_rows.append(
-                {
-                    "process_code": membership["process_code"],
-                    "stage_code": membership["stage_code"],
-                    "selected_document_id": selected_id,
-                    "candidate_document_id": variant_id,
-                    "candidate_title": variant.get("title", ""),
-                    "source_path": variant.get("source_path", ""),
-                    "candidate_basis": "|".join(bases),
-                    "selected_candidate": "YES" if variant_id == selected_id else "NO",
-                }
-            )
-
-    document_search: dict[str, dict[str, Any]] = {}
-    for document_id, document in documents.items():
-        catalog_entry = catalog_by_document.get(document_id, {})
-        search_text = " ".join(
-            [
-                document.get("title", ""),
-                document.get("source_path", ""),
-                catalog_entry.get("name", ""),
-                catalog_entry.get("id", ""),
-            ]
-        )
-        document_search[document_id] = {
-            "tokens": tokenize(search_text),
-            "artifact_type": artifact_type(document),
-        }
-
-    flow_candidate_rows: list[dict[str, Any]] = []
-    candidate_count_by_e2e: defaultdict[str, int] = defaultdict(int)
-    for flow_row in flow_rows:
-        if flow_row["flow_class"] != "E2E_CANDIDATE" or not flow_row["e2e_code"]:
-            continue
-        queries = [
-            {
-                "node_id": "__FLOW__",
-                "node_label": flow_row["title"],
-                "query_type": "flow-title",
-            }
-        ]
-        queries.extend(
-            {
-                "node_id": node["node_id"],
-                "node_label": node["node_label"],
-                "query_type": "flow-node",
-            }
-            for node in flow_structures[flow_row["flow_id"]]["nodes"]
-        )
-        for query in queries:
-            query_tokens = tokenize(query["node_label"])
-            if not query_tokens:
-                continue
-            matches = []
-            for document_id, search in document_search.items():
-                if search["artifact_type"] in {"PROCESS_FLOW", "TOOLING", "CATALOG_OR_CONFIG"}:
-                    continue
-                common = query_tokens & search["tokens"]
-                if not common:
-                    continue
-                coverage = len(common) / len(query_tokens)
-                candidate_status = "MECHANICAL_CANDIDATE"
-                if len(common) >= 2 and coverage >= 0.66:
-                    score = 100 if query_tokens <= search["tokens"] else round(50 + coverage * 50)
-                else:
-                    longest_common = max(len(token) for token in common)
-                    if len(query_tokens) == 1 and longest_common >= 5:
-                        score = 65
-                    elif len(query_tokens) <= 3 and longest_common >= 7:
-                        score = 55
-                    else:
-                        continue
-                    candidate_status = "WEAK_MECHANICAL_CANDIDATE"
-                document = documents[document_id]
-                matches.append(
-                    {
-                        "e2e_code": flow_row["e2e_code"],
-                        "flow_id": flow_row["flow_id"],
-                        "query_type": query["query_type"],
-                        "node_id": query["node_id"],
-                        "node_label": query["node_label"],
-                        "candidate_document_id": document_id,
-                        "candidate_title": document.get("title", ""),
-                        "source_path": document.get("source_path", ""),
-                        "artifact_type": search["artifact_type"],
-                        "match_score": score,
-                        "matched_tokens": "|".join(sorted(common)),
-                        "candidate_status": candidate_status,
-                    }
-                )
-            matches.sort(key=lambda item: (-item["match_score"], item["source_path"].casefold()))
-            for match in matches[:5]:
-                flow_candidate_rows.append(match)
-                candidate_count_by_e2e[flow_row["e2e_code"]] += 1
-
-    explicit_memberships_by_process: defaultdict[str, set[str]] = defaultdict(set)
-    source_membership_rows_by_process: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    for membership in membership_rows:
-        if membership["membership_status"] == "SOURCE_EXPLICIT":
-            explicit_memberships_by_process[membership["process_code"]].add(membership["document_id"])
-            source_membership_rows_by_process[membership["process_code"]].append(membership)
-
-    e2e_domain_rows: list[dict[str, Any]] = []
-    explicit_membership_rows_by_e2e: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    for flow_row in flow_rows:
-        if flow_row["flow_class"] != "E2E_CANDIDATE" or not flow_row["e2e_code"]:
-            continue
-        explicit_process_ids = [value for value in flow_row["explicit_process_ids"].split("|") if value]
-        explicit_document_ids: set[str] = set()
-        for process_id in explicit_process_ids:
-            explicit_document_ids.update(explicit_memberships_by_process.get(process_id, set()))
-            explicit_membership_rows_by_e2e[flow_row["e2e_code"]].extend(
-                source_membership_rows_by_process.get(process_id, [])
-            )
-        e2e_domain_rows.append(
-            {
-                "e2e_code": flow_row["e2e_code"],
-                "title": flow_row["title"],
-                "macro_group": flow_row["macro_group"],
-                "status": "SOURCE_FLOW_WITH_EXPLICIT_PATH" if explicit_process_ids else "SOURCE_FLOW_CANDIDATE",
-                "origin": "mermaid-source",
-                "flow_id": flow_row["flow_id"],
-                "flow_document_id": flow_row["document_id"],
-                "source_path": flow_row["source_path"],
-                "node_count": flow_row["node_count"],
-                "edge_count": flow_row["edge_count"],
-                "explicit_process_ids": flow_row["explicit_process_ids"],
-                "explicit_membership_count": len(explicit_document_ids),
-                "manual_stage_count": 0,
-                "manual_candidate_membership_count": 0,
-                "candidate_match_count": candidate_count_by_e2e[flow_row["e2e_code"]],
-                "notes": "Flow dan kandidat dokumen berasal dari ekstraksi mekanis; perlu review manual.",
-            }
-        )
-
-    for process in process_rows:
-        if process["origin"] == "prd-paths-v2.json":
-            continue
-        process_code = process["process_code"]
-        e2e_domain_rows.append(
-            {
-                "e2e_code": process_code,
-                "title": process["title"],
-                "macro_group": process["owner"],
-                "status": process["status"],
-                "origin": process["origin"],
-                "flow_id": "",
-                "flow_document_id": "",
-                "source_path": "",
-                "node_count": 0,
-                "edge_count": 0,
-                "explicit_process_ids": "",
-                "explicit_membership_count": 0,
-                "manual_stage_count": process["stage_count"],
-                "manual_candidate_membership_count": process["membership_count"],
-                "candidate_match_count": 0,
-                "notes": process["notes"],
-            }
-        )
-    e2e_domain_rows.sort(key=lambda item: item["e2e_code"])
-
-    direct_mapped_document_ids = {item["document_id"] for item in membership_rows}
-    direct_mapped_document_ids.update(
-        process.get("source_flow_document_id", "") for process in process_rows if process.get("source_flow_document_id")
     )
-    explicit_processes_by_document: defaultdict[str, set[str]] = defaultdict(set)
-    manual_e2e_by_document: defaultdict[str, set[str]] = defaultdict(set)
-    for membership in membership_rows:
-        if membership["membership_status"] == "SOURCE_EXPLICIT":
-            explicit_processes_by_document[membership["document_id"]].add(membership["process_code"])
-        else:
-            manual_e2e_by_document[membership["document_id"]].add(membership["process_code"])
-
-    mechanical_e2e_by_document: defaultdict[str, set[str]] = defaultdict(set)
-    for candidate in flow_candidate_rows:
-        mechanical_e2e_by_document[candidate["candidate_document_id"]].add(candidate["e2e_code"])
-
-    source_flow_e2e_by_document: defaultdict[str, set[str]] = defaultdict(set)
-    flow_classes_by_document: defaultdict[str, set[str]] = defaultdict(set)
-    for flow in flow_rows:
-        if not flow["document_id"]:
-            continue
-        flow_classes_by_document[flow["document_id"]].add(flow["flow_class"])
-        if flow["e2e_code"]:
-            source_flow_e2e_by_document[flow["document_id"]].add(flow["e2e_code"])
-
-    document_coverage_rows: list[dict[str, Any]] = []
-    unmapped_rows = []
-    for document_id, document in documents.items():
-        source_row = source_rows.get(document_id, {})
-        if explicit_processes_by_document.get(document_id):
-            coverage_status = "SOURCE_EXPLICIT_MEMBERSHIP"
-        elif manual_e2e_by_document.get(document_id):
-            coverage_status = "MANUAL_CANDIDATE_MEMBERSHIP"
-        elif mechanical_e2e_by_document.get(document_id):
-            coverage_status = "MECHANICAL_CANDIDATE"
-        elif source_flow_e2e_by_document.get(document_id):
-            coverage_status = "E2E_SOURCE_FLOW"
-        elif flow_classes_by_document.get(document_id):
-            coverage_status = "FLOW_REFERENCE_OR_DUPLICATE"
-        else:
-            coverage_status = "UNMAPPED_TO_E2E_INVENTORY"
-        coverage_row = {
-            "document_id": document_id,
-            "title": document.get("title", ""),
-            "source_path": document.get("source_path", ""),
-            "source_group": source_row.get("inventory_domain", ""),
-            "artifact_type": artifact_type(document),
-            "content_id": document.get("content_id", ""),
-            "explicit_process_ids": "|".join(sorted(explicit_processes_by_document.get(document_id, set()))),
-            "manual_e2e_codes": "|".join(sorted(manual_e2e_by_document.get(document_id, set()))),
-            "mechanical_candidate_e2e_codes": "|".join(
-                sorted(mechanical_e2e_by_document.get(document_id, set()))
-            ),
-            "source_flow_e2e_codes": "|".join(sorted(source_flow_e2e_by_document.get(document_id, set()))),
-            "flow_classes": "|".join(sorted(flow_classes_by_document.get(document_id, set()))),
-            "coverage_status": coverage_status,
-        }
-        document_coverage_rows.append(coverage_row)
-        if coverage_status == "UNMAPPED_TO_E2E_INVENTORY":
-            unmapped_rows.append(
-                {
-                    "document_id": document_id,
-                    "title": document.get("title", ""),
-                    "source_path": document.get("source_path", ""),
-                    "source_group": source_row.get("inventory_domain", ""),
-                    "extension": document.get("extension", ""),
-                    "content_id": document.get("content_id", ""),
-                    "exact_content_group_size": source_row.get("exact_content_group_size", ""),
-                    "mapping_status": coverage_status,
-                }
-            )
-    document_coverage_rows.sort(key=lambda item: (item["coverage_status"], item["source_path"].casefold()))
-    unmapped_rows.sort(key=lambda item: (item["source_group"].casefold(), item["source_path"].casefold()))
-    candidate_document_ids = set(mechanical_e2e_by_document)
-    covered_document_ids = {
-        row["document_id"]
-        for row in document_coverage_rows
-        if row["coverage_status"] != "UNMAPPED_TO_E2E_INVENTORY"
-    }
-    coverage_status_counts: defaultdict[str, int] = defaultdict(int)
-    for row in document_coverage_rows:
-        coverage_status_counts[row["coverage_status"]] += 1
-
-    write_csv(target / "process-register.csv", PROCESS_FIELDS, process_rows)
-    write_csv(target / "stage-register.csv", STAGE_FIELDS, stage_rows)
-    write_csv(target / "membership-register.csv", MEMBERSHIP_FIELDS, membership_rows)
-    write_csv(
-        target / "candidate-variants.csv",
-        [
-            "process_code",
-            "stage_code",
-            "selected_document_id",
-            "candidate_document_id",
-            "candidate_title",
-            "source_path",
-            "candidate_basis",
-            "selected_candidate",
-        ],
-        variant_rows,
-    )
-    write_csv(
-        target / "unmapped-documents.csv",
-        [
-            "document_id",
-            "title",
-            "source_path",
-            "source_group",
-            "extension",
-            "content_id",
-            "exact_content_group_size",
-            "mapping_status",
-        ],
-        unmapped_rows,
-    )
-    write_csv(
-        target / "document-e2e-coverage.csv",
-        [
-            "document_id",
-            "title",
-            "source_path",
-            "source_group",
-            "artifact_type",
-            "content_id",
-            "explicit_process_ids",
-            "manual_e2e_codes",
-            "mechanical_candidate_e2e_codes",
-            "source_flow_e2e_codes",
-            "flow_classes",
-            "coverage_status",
-        ],
-        document_coverage_rows,
-    )
-    write_csv(target / "flow-register.csv", FLOW_FIELDS, sorted(flow_rows, key=lambda item: item["source_path"]))
-    write_csv(target / "e2e-domain-register.csv", E2E_DOMAIN_FIELDS, e2e_domain_rows)
-    write_csv(
-        target / "flow-node-register.csv",
-        [
-            "flow_id",
-            "e2e_code",
-            "flow_class",
-            "node_order",
-            "node_id",
-            "node_label",
-            "node_shape",
-            "first_line",
-        ],
-        sorted(flow_nodes, key=lambda item: (item["flow_id"], item["node_order"])),
-    )
-    write_csv(
-        target / "flow-edge-register.csv",
-        [
-            "flow_id",
-            "e2e_code",
-            "flow_class",
-            "edge_order",
-            "from_node",
-            "to_node",
-            "edge_label",
-            "source_line_number",
-            "source_line",
-        ],
-        sorted(flow_edges, key=lambda item: (item["flow_id"], item["edge_order"])),
-    )
-    write_csv(
-        target / "flow-document-candidates.csv",
-        [
-            "e2e_code",
-            "flow_id",
-            "query_type",
-            "node_id",
-            "node_label",
-            "candidate_document_id",
-            "candidate_title",
-            "source_path",
-            "artifact_type",
-            "match_score",
-            "matched_tokens",
-            "candidate_status",
-        ],
-        sorted(
-            flow_candidate_rows,
-            key=lambda item: (item["e2e_code"], item["node_id"], -item["match_score"], item["source_path"]),
-        ),
-    )
-
-    nested_processes = []
-    for process in process_rows:
-        process_stages = []
-        for stage in [item for item in stage_rows if item["process_code"] == process["process_code"]]:
-            process_stages.append(
-                {
-                    **stage,
-                    "memberships": memberships_by_stage.get((process["process_code"], stage["stage_code"]), []),
-                }
-            )
-        nested_processes.append({**process, "stages": process_stages})
-    inventory_json = {
-        "schema_version": 1,
-        "policy": {
-            "source_processes": "preserved-from-prd-paths-v2",
-            "manual_processes": "user-controlled-csv-explicit-approval-only",
-            "manual_memberships": "candidate-until-user-confirmed",
-            "document_relationship": "many-to-many",
-        },
-        "process_count": len(process_rows),
-        "stage_count": len(stage_rows),
-        "membership_count": len(membership_rows),
-        "document_count": len(document_coverage_rows),
-        "direct_mapped_document_count": len(direct_mapped_document_ids),
-        "candidate_document_count": len(candidate_document_ids),
-        "covered_document_count": len(covered_document_ids),
-        "unmapped_document_count": len(unmapped_rows),
-        "coverage_status_counts": dict(sorted(coverage_status_counts.items())),
-        "processes": nested_processes,
-    }
-    (target / "process-inventory.json").write_text(
-        json.dumps(inventory_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-
-    candidates_by_query: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for candidate in flow_candidate_rows:
-        candidates_by_query[(candidate["e2e_code"], candidate["node_id"])].append(candidate)
-
-    e2e_json_domains = []
-    for domain in e2e_domain_rows:
-        if domain["flow_id"]:
-            structure = flow_structures[domain["flow_id"]]
-            e2e_json_domains.append(
-                {
-                    **domain,
-                    "explicit_memberships": explicit_membership_rows_by_e2e.get(domain["e2e_code"], []),
-                    "nodes": [
-                        {
-                            **node,
-                            "document_candidates": candidates_by_query.get(
-                                (domain["e2e_code"], node["node_id"]), []
-                            ),
-                        }
-                        for node in structure["nodes"]
-                    ],
-                    "flow_title_candidates": candidates_by_query.get((domain["e2e_code"], "__FLOW__"), []),
-                    "edges": structure["edges"],
-                }
-            )
-        else:
-            manual_process = next(
-                process for process in nested_processes if process["process_code"] == domain["e2e_code"]
-            )
-            e2e_json_domains.append({**domain, "stages": manual_process["stages"]})
-
-    e2e_domain_json = {
-        "schema_version": 1,
-        "policy": {
-            "e2e_candidates": "source-flow-or-user-defined",
-            "flow_nodes_and_edges": "literal-mermaid-extraction",
-            "document_candidates": "mechanical-token-overlap-only",
-            "approval": "manual-required",
-        },
-        "source_flow_count": len(flow_rows),
-        "e2e_domain_count": len(e2e_domain_rows),
-        "e2e_source_flow_count": sum(row["origin"] == "mermaid-source" for row in e2e_domain_rows),
-        "manual_e2e_count": sum(row["origin"] != "mermaid-source" for row in e2e_domain_rows),
-        "reference_flow_count": sum(row["flow_class"] == "REFERENCE_MAP" for row in flow_rows),
-        "duplicate_flow_count": sum(row["flow_class"] == "DUPLICATE_FLOW" for row in flow_rows),
-        "candidate_match_count": len(flow_candidate_rows),
-        "document_count": len(document_coverage_rows),
-        "direct_mapped_document_count": len(direct_mapped_document_ids),
-        "candidate_document_count": len(candidate_document_ids),
-        "covered_document_count": len(covered_document_ids),
-        "unmapped_document_count": len(unmapped_rows),
-        "coverage_status_counts": dict(sorted(coverage_status_counts.items())),
-        "domains": e2e_json_domains,
-    }
-    (target / "e2e-domain-inventory.json").write_text(
-        json.dumps(e2e_domain_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-
-    by_e2e_lines = [
-        "# Inventaris Lengkap Domain End-to-End",
-        "",
-        "> Seluruh flow dan kandidat dokumen pada halaman ini adalah inventaris. Status kandidat tidak berarti hubungan sudah disetujui.",
-        "",
-    ]
-    for domain in e2e_domain_rows:
-        by_e2e_lines.extend(
-            [
-                f"## {domain['e2e_code']} - {domain['title']}",
-                "",
-                f"- Status: `{domain['status']}`",
-                f"- Macro group: `{domain['macro_group'] or '-'}`",
-                f"- Origin: `{domain['origin']}`",
-                f"- Explicit process paths: `{domain['explicit_process_ids'] or '-'}`",
-                f"- Kandidat dokumen mekanis: `{domain['candidate_match_count']}`",
-            ]
-        )
-        if domain["flow_document_id"]:
-            flow_link = f"../../documents/{domain['flow_document_id']}/index.md"
-            by_e2e_lines.append(
-                f"- Source flow: [{domain['flow_document_id']}](<{flow_link}>) - `{markdown_cell(domain['source_path'])}`"
-            )
-        if domain.get("notes"):
-            by_e2e_lines.append(f"- Notes: {domain['notes']}")
-        by_e2e_lines.append("")
-
-        if not domain["flow_id"]:
-            manual_process = next(
-                process for process in nested_processes if process["process_code"] == domain["e2e_code"]
-            )
-            by_e2e_lines.extend(
-                [
-                    "| Urutan | Stage | Capability | Dokumen kandidat | Role | Status |",
-                    "|---:|---|---|---|---|---|",
-                ]
-            )
-            for stage in manual_process["stages"]:
-                stage_memberships = stage.get("memberships", [])
-                if not stage_memberships:
-                    by_e2e_lines.append(
-                        f"| {stage['stage_order']} | `{stage['stage_code']}` | {markdown_cell(stage['stage_title'])} | "
-                        "- | `-` | `-` |"
-                    )
-                    continue
-                for membership in stage_memberships:
-                    doc_link = f"../../documents/{membership['document_id']}/index.md"
-                    by_e2e_lines.append(
-                        f"| {stage['stage_order']} | `{stage['stage_code']}` | {markdown_cell(stage['stage_title'])} | "
-                        f"[{membership['document_id']}](<{doc_link}>) {markdown_cell(membership['document_title'])} | "
-                        f"`{membership['membership_role']}` | `{membership['membership_status']}` |"
-                    )
-            by_e2e_lines.append("")
-            continue
-
-        structure = flow_structures[domain["flow_id"]]
-        explicit_domain_memberships = explicit_membership_rows_by_e2e.get(domain["e2e_code"], [])
-        if explicit_domain_memberships:
-            by_e2e_lines.extend(
-                [
-                    "### Dokumen dari Path Eksplisit",
-                    "",
-                    "| Process path | Stage | Dokumen | Role |",
-                    "|---|---|---|---|",
-                ]
-            )
-            for membership in explicit_domain_memberships:
-                doc_link = f"../../documents/{membership['document_id']}/index.md"
-                by_e2e_lines.append(
-                    f"| `{membership['process_code']}` | `{membership['stage_code']}` | "
-                    f"[{membership['document_id']}](<{doc_link}>) {markdown_cell(membership['document_title'])} | "
-                    f"`{membership['membership_role']}` |"
-                )
-            by_e2e_lines.append("")
-        flow_title_candidates = candidates_by_query.get((domain["e2e_code"], "__FLOW__"), [])
-        if flow_title_candidates:
-            by_e2e_lines.extend(["### Kandidat Tingkat Proses", ""])
-            for candidate in flow_title_candidates[:5]:
-                doc_link = f"../../documents/{candidate['candidate_document_id']}/index.md"
-                by_e2e_lines.append(
-                    f"- [{candidate['candidate_document_id']}](<{doc_link}>) {markdown_cell(candidate['candidate_title'])} "
-                    f"- score `{candidate['match_score']}` - `{candidate['artifact_type']}`"
-                )
-            by_e2e_lines.append("")
-
-        by_e2e_lines.extend(
-            [
-                "### Flow Nodes",
-                "",
-                "| Urutan | Node | Label sumber | Bentuk | Kandidat dokumen |",
-                "|---:|---|---|---|---|",
-            ]
-        )
-        for node in structure["nodes"]:
-            node_candidates = candidates_by_query.get((domain["e2e_code"], node["node_id"]), [])[:3]
-            candidate_labels = []
-            for candidate in node_candidates:
-                doc_link = f"../../documents/{candidate['candidate_document_id']}/index.md"
-                candidate_labels.append(
-                    f"[{candidate['candidate_document_id']}](<{doc_link}>) ({candidate['match_score']})"
-                )
-            by_e2e_lines.append(
-                f"| {node['node_order']} | `{node['node_id']}` | {markdown_cell(node['node_label'])} | "
-                f"`{node['node_shape']}` | {'<br>'.join(candidate_labels) or '-'} |"
-            )
-        by_e2e_lines.extend(
-            [
-                "",
-                "### Flow Edges",
-                "",
-                "| Urutan | From | Kondisi | To |",
-                "|---:|---|---|---|",
-            ]
-        )
-        for edge in structure["edges"]:
-            by_e2e_lines.append(
-                f"| {edge['edge_order']} | `{edge['from_node']}` | {markdown_cell(edge['edge_label'] or '-')} | "
-                f"`{edge['to_node']}` |"
-            )
-        by_e2e_lines.append("")
-    (target / "by-e2e-domain.md").write_text("\n".join(by_e2e_lines).rstrip() + "\n", encoding="utf-8")
-
-    by_process_lines = [
-        "# Inventaris Dokumen berdasarkan Proses End-to-End",
-        "",
-        "> Proses `SOURCE_EXPLICIT` berasal dari `prd-paths-v2.json`. Proses atau membership `DRAFT/CANDIDATE` memerlukan konfirmasi manual.",
-        "",
-    ]
-    for process in process_rows:
-        process_code = process["process_code"]
-        by_process_lines.extend(
-            [
-                f"## {process_code} - {process['title']}",
-                "",
-                f"- Status: `{process['status']}`",
-                f"- Origin: `{process['origin']}`",
-                f"- Category/owner: `{process['category'] or process['owner'] or '-'}`",
-                f"- Scenario: {process['scenario'] or '-'}",
-                f"- Start event: {process['start_event'] or '(belum ditetapkan)' }",
-                f"- End event: {process['end_event'] or '(belum ditetapkan)' }",
-            ]
-        )
-        if process.get("source_flow_document_id"):
-            flow_link = f"../../documents/{process['source_flow_document_id']}/index.md"
-            by_process_lines.append(
-                f"- Source flow: [{process['source_flow_document_id']}](<{flow_link}>) - `{markdown_cell(process['source_flow'])}`"
-            )
-        if process.get("notes"):
-            by_process_lines.append(f"- Notes: {process['notes']}")
-        by_process_lines.extend(
-            [
-                "",
-                "| Urutan | Stage | Capability | Dokumen | Role | Membership | Entry condition | Output |",
-                "|---:|---|---|---|---|---|---|---|",
-            ]
-        )
-        process_stage_rows = [item for item in stage_rows if item["process_code"] == process_code]
-        for stage in process_stage_rows:
-            stage_memberships = memberships_by_stage.get((process_code, stage["stage_code"]), [])
-            if not stage_memberships:
-                by_process_lines.append(
-                    f"| {stage['stage_order']} | `{stage['stage_code']}` | {markdown_cell(stage['stage_title'])} | "
-                    f"(belum dipetakan) | `-` | `-` | {markdown_cell(stage['entry_condition'] or '-')} | "
-                    f"{markdown_cell(stage['output'] or '-')} |"
-                )
-                continue
-            for membership in stage_memberships:
-                doc_link = f"../../documents/{membership['document_id']}/index.md"
-                by_process_lines.append(
-                    f"| {stage['stage_order']} | `{stage['stage_code']}` | {markdown_cell(stage['stage_title'])} | "
-                    f"[{membership['document_id']}](<{doc_link}>) {markdown_cell(membership['document_title'])} | "
-                    f"`{membership['membership_role']}` | `{membership['membership_status']}` | "
-                    f"{markdown_cell(stage['entry_condition'] or '-')} | {markdown_cell(stage['output'] or '-')} |"
-                )
-        by_process_lines.append("")
-
-        process_variants = [item for item in variant_rows if item["process_code"] == process_code]
-        if process_variants:
-            by_process_lines.extend(
-                [
-                    "### Kandidat/Varian Sumber",
-                    "",
-                    "| Stage | Kandidat | Basis | Dipilih sementara |",
-                    "|---|---|---|---|",
-                ]
-            )
-            for variant in process_variants:
-                doc_link = f"../../documents/{variant['candidate_document_id']}/index.md"
-                by_process_lines.append(
-                    f"| `{variant['stage_code']}` | [{variant['candidate_document_id']}](<{doc_link}>) "
-                    f"{markdown_cell(variant['candidate_title'])} | `{variant['candidate_basis']}` | "
-                    f"`{variant['selected_candidate']}` |"
-                )
-            by_process_lines.append("")
-    (target / "by-process.md").write_text("\n".join(by_process_lines).rstrip() + "\n", encoding="utf-8")
-
-    readme = f"""# Inventaris Proses End-to-End
-
-Inventaris ini mengelompokkan dokumen berdasarkan proses bisnis end-to-end, bukan berdasarkan folder atau modul sumber.
-
-## Ringkasan
-
-- Flow sumber yang diinventaris: `{len(flow_rows)}`
-- Domain E2E kandidat dari flow unik: `{sum(domain['origin'] == 'mermaid-source' for domain in e2e_domain_rows)}`
-- Domain E2E manual/draft: `{sum(domain['origin'] != 'mermaid-source' for domain in e2e_domain_rows)}`
-- Total domain E2E kandidat: `{len(e2e_domain_rows)}`
-- Flow referensi tingkat agregat: `{sum(flow['flow_class'] == 'REFERENCE_MAP' for flow in flow_rows)}`
-- Flow duplikat yang diarahkan ke counterpart: `{sum(flow['flow_class'] == 'DUPLICATE_FLOW' for flow in flow_rows)}`
-- Kandidat dokumen hasil pencocokan mekanis: `{len(flow_candidate_rows)}`
-- Proses sumber eksplisit: `{sum(process['status'] == 'SOURCE_EXPLICIT' for process in process_rows)}`
-- Proses manual/draft: `{sum(process['status'] != 'SOURCE_EXPLICIT' for process in process_rows)}`
-- Total proses: `{len(process_rows)}`
-- Total tahap: `{len(stage_rows)}`
-- Membership dokumen: `{len(membership_rows)}`
-- Total dokumen dalam matriks coverage: `{len(document_coverage_rows)}`
-- Dokumen dengan hubungan langsung (membership atau source flow eksplisit): `{len(direct_mapped_document_ids)}`
-- Dokumen dengan kandidat hubungan mekanis: `{len(candidate_document_ids)}`
-- Dokumen tercakup oleh hubungan langsung, kandidat, atau artefak flow: `{len(covered_document_ids)}`
-- Dokumen belum dipetakan ke proses E2E: `{len(unmapped_rows)}`
-
-## Status Coverage Dokumen
-
-- Source explicit membership: `{coverage_status_counts['SOURCE_EXPLICIT_MEMBERSHIP']}`
-- Manual candidate membership: `{coverage_status_counts['MANUAL_CANDIDATE_MEMBERSHIP']}`
-- Mechanical candidate: `{coverage_status_counts['MECHANICAL_CANDIDATE']}`
-- E2E source flow: `{coverage_status_counts['E2E_SOURCE_FLOW']}`
-- Flow reference atau duplicate: `{coverage_status_counts['FLOW_REFERENCE_OR_DUPLICATE']}`
-- Belum terpetakan ke inventaris E2E: `{coverage_status_counts['UNMAPPED_TO_E2E_INVENTORY']}`
-
-## Model
-
-- Satu proses mempunyai tahap terurut.
-- Satu tahap dapat menunjuk satu atau lebih dokumen.
-- Satu dokumen dapat digunakan oleh beberapa proses tanpa disalin.
-- Membership `CANDIDATE` atau role `UNCONFIRMED` belum menjadi keputusan final.
-- Proses `SOURCE_EXPLICIT` mempertahankan isi `prd-paths-v2.json` dan tetap perlu direview sebagai calon E2E final.
-- Flow node dan edge diekstrak literal dari Mermaid; urutan node adalah urutan kemunculan, bukan keputusan urutan implementasi.
-- Pencocokan dokumen memakai token literal/mekanis dan selalu berstatus `MECHANICAL_CANDIDATE`.
-
-## Input Manual
-
-- `manual-processes.csv`: definisi proses E2E yang dibuat user.
-- `manual-stages.csv`: urutan tahap di dalam proses manual.
-- `manual-memberships.csv`: pemetaan dokumen ke tahap dan role-nya.
-
-Ketiga file tersebut tidak ditulis ulang oleh generator. File lainnya adalah keluaran turunan.
-Contoh alur, hipotesis, atau ilustrasi percakapan tidak boleh dimasukkan sebagai proses manual tanpa persetujuan eksplisit user.
-
-## Keluaran
-
-- `e2e-domain-register.csv`: seluruh kandidat domain E2E unik.
-- `by-e2e-domain.md`: tampilan lengkap node, edge, dan kandidat dokumen per domain E2E.
-- `e2e-domain-inventory.json`: bentuk nested domain E2E lengkap.
-- `flow-register.csv`: klasifikasi seluruh flow sumber.
-- `flow-node-register.csv`: node literal dari Mermaid.
-- `flow-edge-register.csv`: edge literal dari Mermaid.
-- `flow-document-candidates.csv`: kandidat dokumen berdasarkan kecocokan token mekanis.
-- `document-e2e-coverage.csv`: matriks lengkap satu baris per dokumen beserta status dan seluruh kode E2E kandidatnya.
-- `process-register.csv`: daftar proses dan statusnya.
-- `stage-register.csv`: seluruh tahap terurut.
-- `membership-register.csv`: hubungan many-to-many proses, tahap, dan dokumen.
-- `by-process.md`: tampilan manusia per proses.
-- `candidate-variants.csv`: varian exact duplicate atau generator counterpart untuk kandidat manual.
-- `unmapped-documents.csv`: dokumen yang belum terhubung ke proses E2E.
-- `process-inventory.json`: bentuk nested machine-readable.
-
-## Status Manual yang Disarankan
-
-Proses: `DRAFT`, `IN_REVIEW`, `CONFIRMED`, `BASELINED`.
-
-Tahap: `DRAFT`, `CONFIRMED`, `NEEDS_DETAIL`.
-
-Membership: `CANDIDATE`, `CONFIRMED`, `CONTEXT`, `EXCLUDED`.
-
-Role: `MAIN`, `SHARED`, `INTEGRATION`, `CONTEXT`, `REFERENCE`, atau `UNCONFIRMED`.
-"""
-    (target / "README.md").write_text(readme, encoding="utf-8")
-
-    manifest = {
-        "schema_version": 1,
-        "inputs": [
-            "catalog/document-index.json",
-            "catalog/process-index.json",
-            "catalog/source-domain-feature-index.json",
-            "catalog/correlation-index.json",
-            "reconciliation/inventory/document-register.json",
-            "reconciliation/e2e-inventory/manual-processes.csv",
-            "reconciliation/e2e-inventory/manual-stages.csv",
-            "reconciliation/e2e-inventory/manual-memberships.csv",
-        ],
-        "outputs": [
-            "reconciliation/e2e-inventory/README.md",
-            "reconciliation/e2e-inventory/e2e-domain-register.csv",
-            "reconciliation/e2e-inventory/by-e2e-domain.md",
-            "reconciliation/e2e-inventory/e2e-domain-inventory.json",
-            "reconciliation/e2e-inventory/flow-register.csv",
-            "reconciliation/e2e-inventory/flow-node-register.csv",
-            "reconciliation/e2e-inventory/flow-edge-register.csv",
-            "reconciliation/e2e-inventory/flow-document-candidates.csv",
-            "reconciliation/e2e-inventory/document-e2e-coverage.csv",
-            "reconciliation/e2e-inventory/process-register.csv",
-            "reconciliation/e2e-inventory/stage-register.csv",
-            "reconciliation/e2e-inventory/membership-register.csv",
-            "reconciliation/e2e-inventory/candidate-variants.csv",
-            "reconciliation/e2e-inventory/unmapped-documents.csv",
-            "reconciliation/e2e-inventory/process-inventory.json",
-            "reconciliation/e2e-inventory/by-process.md",
-        ],
-        "process_count": len(process_rows),
-        "source_flow_count": len(flow_rows),
-        "e2e_domain_count": len(e2e_domain_rows),
-        "reference_flow_count": sum(flow["flow_class"] == "REFERENCE_MAP" for flow in flow_rows),
-        "duplicate_flow_count": sum(flow["flow_class"] == "DUPLICATE_FLOW" for flow in flow_rows),
-        "candidate_match_count": len(flow_candidate_rows),
-        "stage_count": len(stage_rows),
-        "membership_count": len(membership_rows),
-        "document_count": len(document_coverage_rows),
-        "direct_mapped_document_count": len(direct_mapped_document_ids),
-        "candidate_document_count": len(candidate_document_ids),
-        "covered_document_count": len(covered_document_ids),
-        "unmapped_document_count": len(unmapped_rows),
-        "coverage_status_counts": dict(sorted(coverage_status_counts.items())),
-    }
-    (target / "inventory-manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    print(json.dumps({"status": "BUILT", **manifest}, ensure_ascii=False, indent=2))
     return 0
 
 

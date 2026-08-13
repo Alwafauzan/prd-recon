@@ -16,6 +16,25 @@ used as source truth, and the bot container mounts only that submodule at
 `/repository` read-only. Skills, scripts, and server code remain in the parent
 `neurovi-doc-reconciliator` repository.
 
+The reconciliation agent accepts as primary sources only original PRD files
+with the exact `.md` extension that are cataloged from and physically present
+beneath `source/original/PRD/PRD Generator (.md)/`. It excludes the similarly
+named Copy folder, all other original-source folders, `menu-flow`,
+`KONTEKS-SESI.md`, the APLICARES API document, and
+`ringkasan-merge-prd-rj.md`. Reconciliation consumes only the verified lossless
+canonical baseline under `reconciliation/canonical/`. Its PRD payloads must be
+complete and match the eligible originals byte-for-byte; its E2E files provide
+worklist and relationship context without establishing new facts. Mermaid, PDF, DOCX, other generated documents,
+Graphify artifacts, user-added references, and all other sources may support
+reasoning and discovery only. They cannot establish source facts, enter
+document selection or selected-document context, or override a primary PRD.
+
+The only active E2E inventory is
+`reconciliation/e2e-inventory/domain-worklist.json`. It maps every unique
+eligible PRD to one owner domain and keeps within-domain and cross-domain
+relationships in the same inventory. Legacy Mermaid/process-path inventories
+and the 643-file source-folder inventory are intentionally not deployed.
+
 ## Install as a Python Package
 
 Python 3.11 or newer is required.
@@ -30,7 +49,7 @@ List and execute capabilities locally:
 
 ```bash
 .venv/bin/neurovi-doc-reconciliator capabilities
-.venv/bin/neurovi-doc-reconciliator run e2e.list --param group=admisi-emr
+.venv/bin/neurovi-doc-reconciliator run e2e.list --param group=pelayanan-utama
 .venv/bin/neurovi-doc-reconciliator run prd.show \
   --param document=DOC-4287D4C5CFF2D2E0 \
   --param "section=3. In Scope"
@@ -48,7 +67,7 @@ List and execute capabilities locally:
 7. Set `NEUROVI_DISCORD_ALLOWED_CHANNEL_IDS` to the comma-separated channel IDs
    where the bot is allowed to respond.
 8. Enable the Message Content privileged intent for natural-language help.
-9. Set role IDs before enabling reconciliation or `/finish`.
+9. Set role IDs before enabling reconciliation or baseline approval workflows.
 
 In an allowed channel, every ordinary user question creates a public help
 thread attached to the triggering message; a bot mention is not required.
@@ -57,6 +76,29 @@ parent is an allowed channel. Other threads are ignored even when their parent
 is allowed. Everywhere else the bot ignores messages, mentions, and direct
 messages. Slash commands and reconciliation components outside the allowed
 channel receive no bot response and execute no capability.
+
+The primary user entry point is `/mulai`. It opens separate **Perbaiki alur
+utama** and **Perbaiki detail proses** actions, with mode-specific resume
+buttons. The two reconciliation modes have independent workspaces, questions,
+audit events, and stop states. The guided menu also includes read-only
+**Kesehatan per flow** and **Kesehatan keseluruhan** statistics. The health
+commands aggregate deterministic scanner output without calling the LLM or
+modifying repository content. Process selection uses a dropdown, so hospital
+staff do not need E2E codes, document IDs, session
+IDs, or decision codes. Active reconciliation cards always include an **Akhiri
+sesi** button with confirmation. Ending a session preserves its audit and open
+question but does not publish, commit, tag, or push.
+
+AI-backed button actions edit the active card into a visible processing state
+and temporarily disable every control to prevent duplicate submissions. A
+successful request replaces the card with the next interaction state. A failed
+request restores the previous controls. The bot distinguishes an unsaved action
+from an answer that was recorded before the next-question request failed.
+
+Bot-owned `neurovi-help-*` threads are treated as scoped continuations of the
+allowed parent channel. Natural-language follow-ups, slash-command autocomplete,
+slash commands, and reconciliation components work there. Other threads remain
+inactive even when they share the same parent channel.
 
 The contextual advisor runs through the internal gateway but is separated from
 reconciliation capabilities: it requires no reconciliation role, receives only
@@ -122,7 +164,8 @@ At runtime, the model does not receive arbitrary filesystem or Git write
 access. The server supplies repository evidence and selected PRD excerpts,
 requires structured JSON output, and applies only whitelisted session/register
 updates. Mechanical findings remain candidates, and model output cannot become
-baseline content without an explicit `/reconcile decide` user decision.
+baseline content without an explicit user decision through the guided
+reconciliation card.
 
 ## Agent Gateway Contract
 
@@ -130,9 +173,9 @@ The bot sends an HTTP `POST` request:
 
 ```json
 {
-  "capability": "reconcile.start",
+  "capability": "reconcile.main-flow.start",
   "parameters": {
-    "e2e": "E2E-ADM-01",
+    "e2e": "E2E-RJ",
     "repository_root": "/repository"
   },
   "actor": {
@@ -151,7 +194,7 @@ The gateway must return:
 {
   "message": "Question or result for the user",
   "status": "AWAITING_USER",
-  "session_id": "REC-E2E-ADM-01-001"
+  "session_id": "REC-E2E-RJ-MF-001"
 }
 ```
 
@@ -168,7 +211,7 @@ the repository configured inside the agent container.
 {
   "capability": "reconcile.finish",
   "parameters": {
-    "session_id": "REC-E2E-ADM-01-001",
+    "session_id": "REC-E2E-RJ-MF-001",
     "approval": "BASELINE_APPROVAL",
     "version_bump": "patch",
     "publish": true,
@@ -206,7 +249,7 @@ The success response must identify the exact published state:
 {
   "message": "Global baseline v0.0.2 published.",
   "status": "PUBLISHED",
-  "session_id": "REC-E2E-ADM-01-001",
+  "session_id": "REC-E2E-RJ-MF-001",
   "result": {
     "repository_version": "v0.0.2",
     "commit_sha": "<full-commit-sha>",
@@ -234,8 +277,8 @@ pretends publication succeeded.
 ## Security Defaults
 
 - Discord responses are ephemeral by default.
-- The bot accepts slash commands and reconciliation components only in an
-  allowed channel. Only bot-owned help threads from that channel accept text.
+- The bot accepts commands and components in an allowed channel and its own
+  help threads. Other channels, DMs, and threads remain inactive.
 - Natural-language text is advisory only and cannot execute capabilities.
 - Contextual help output is restricted to the installed slash-command catalog.
 - The document submodule volume is read-only in the Discord bot.

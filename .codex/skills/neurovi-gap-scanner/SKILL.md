@@ -1,102 +1,122 @@
 ---
 name: neurovi-gap-scanner
-description: Scan Neurovi SIMRS E2E flows and PRDs for mechanical, explicit, and user-confirmed context gaps without modifying source documents. Use with no parameter to list E2E flows that still have gaps, with an E2E code or name to map related documents and cross-document context gaps, or with a document code or name to map internal PRD context and format gaps. Use when users ask to scan, inspect, inventory, prioritize, or explain incomplete flow, handoff, data context, cases, conditions, or document structure before controlled reconciliation.
+description: "Run Neurovi PRD read-only diagnostics: a main-flow scanner for E2E continuity, a business-case scanner for detailed behavior, or document-health statistics per business flow and across the full eligible PRD repository. Use when users ask whether an E2E process is connected, whether business cases are sufficiently described, or for aggregate document coverage and review-candidate statistics before controlled reconciliation."
 ---
 
 # Neurovi Gap Scanner
 
 ## Contract
 
-Run this skill as a read-only diagnostic scanner.
+Run this skill as one of two explicit read-only scanners. Never combine their
+findings into one undifferentiated gap report.
 
 1. Read the tools `AGENTS.md` and `neurovi-prd/AGENTS.md`, then obey both.
-2. Read `references/gap-taxonomy.md` before interpreting scan results.
-3. Never edit `source/original/` or reconciliation decisions.
+2. Read `references/gap-taxonomy.md` before interpreting results.
+3. Never edit `source/original/`, inventory ownership, or reconciliation decisions.
 4. Preserve source facts exactly.
-5. Treat missing headings, token matches, Mermaid mappings, and absent generated links as mechanical gap candidates, not proven semantic defects.
-6. Distinguish source flow documents, explicit memberships, confirmed memberships, and mechanical candidates.
-7. Cite document IDs, paths, flow nodes, edges, headings, or register rows for every finding.
-8. Route gap resolution and user interviews to `$neurovi-prd-reconciler`; do not resolve gaps inside this skill.
+5. Use only eligible original `.md` PRDs under
+   `source/original/PRD/PRD Generator (.md)/` as primary scan sources.
+6. Treat other formats, Graphify, Mermaid, and relation indexes as supporting
+   reasoning only. They may help locate a handoff but cannot create a source fact.
+7. Treat missing headings and incomplete mechanical evidence as candidates, not
+   proven semantic defects.
+8. Cite document IDs, paths, worklist steps, relation IDs, evidence references,
+   headings, or marker lines for every finding.
+9. Route user interviews and source-preserving resolution to
+   `$neurovi-prd-reconciler`; do not resolve gaps in this skill.
 
-## Run the Scanner
+## Choose One Scanner
 
-Use the bundled scanner:
+### Scanner 1: Main Business Flow
+
+Use when the question is whether one E2E process is connected from start to
+finish. It checks:
+
+- trigger and initial input;
+- ordered owner-worklist stages;
+- primary sequence and handoff;
+- process output and status transition;
+- source-explicit within-domain and cross-domain continuation;
+- conflicts that change the meaning or order of the main flow.
+
+It excludes alternate cases, detailed validation, error handling, and acceptance
+criteria. A `REFERENCES` relation without explicit flow evidence is supporting
+context and is not treated as a handoff.
 
 ```bash
-# No parameter: list E2Es with remaining gap candidates or confirmed gaps.
-python3 .codex/skills/neurovi-gap-scanner/scripts/scan_gaps.py --repo neurovi-prd
-
-# E2E code or name: map documents and cross-document gaps.
-python3 .codex/skills/neurovi-gap-scanner/scripts/scan_gaps.py --repo neurovi-prd --e2e E2E-ADM-01
-
-# Document code or name: map internal document gaps.
-python3 .codex/skills/neurovi-gap-scanner/scripts/scan_gaps.py --repo neurovi-prd --document DOC-XXXXXXXXXXXXXXX
-python3 .codex/skills/neurovi-gap-scanner/scripts/scan_gaps.py --repo neurovi-prd --document "pendaftaran rawat jalan"
+python3 .codex/skills/neurovi-gap-scanner/scripts/scan_gaps.py \
+  --repo neurovi-prd main-flow --e2e E2E-RI
 ```
 
-Pass `--json` for machine-readable output. Change `--repo` only when the
-document repository is mounted elsewhere.
+### Scanner 2: Detailed Business Cases
+
+Use when the question is whether detailed behavior is described. It checks:
+
+- scope exclusions and case boundaries;
+- alternate scenarios and conditions;
+- business rules and validation behavior;
+- errors and exceptions;
+- acceptance criteria;
+- explicit unresolved markers such as `TBD` or `belum didefinisikan`.
+
+Run it for one PRD when the user names a document. Run it for one E2E to
+aggregate the owner-domain PRD worklist and identify which PRDs require deeper
+review. It excludes primary-flow continuity findings.
+
+```bash
+python3 .codex/skills/neurovi-gap-scanner/scripts/scan_gaps.py \
+  --repo neurovi-prd business-cases --document DOC-4199BA40F7A28D80
+
+python3 .codex/skills/neurovi-gap-scanner/scripts/scan_gaps.py \
+  --repo neurovi-prd business-cases --e2e E2E-EMR
+```
+
+Pass `--json` before the scanner name for machine-readable output. Change
+`--repo` only when the document repository is mounted elsewhere.
 
 ## Route the Request
 
-### No Parameter
+- “Apakah alur Rawat Inap sudah tersambung?” -> main-flow scanner.
+- “Apa handoff Rawat Jalan ke Rawat Inap yang belum jelas?” -> main-flow scanner.
+- “Apakah kasus Tindakan & BHP sudah lengkap?” -> business-case document scanner.
+- “PRD mana dalam EMR yang belum lengkap detail kasusnya?” -> business-case E2E scanner.
+- If the user asks only to “scan gaps” without indicating intent, explain the two
+  choices and ask whether they mean process continuity or detailed behavior.
 
-List only E2Es with at least one gap candidate, open confirmed defect, skipped question, or deferred question.
+## Document Health Statistics
 
-- Sort confirmed/open defects first, then mechanical gap count.
-- Show E2E code, name, current boundary status, gap count, open defect count, and primary gap types.
-- State that the list is a prioritization queue, not proof that each finding is a semantic defect.
-- Ask the user to select an E2E code or name for deeper scanning.
+Use the health aggregator when the user asks for statistics rather than a gap
+interview. It runs both scanners over owner-domain PRDs but keeps their metrics
+separate. It reports detected coverage, documents requiring review, unresolved
+markers, source-explicit flow gaps, and per-flow totals. Never turn the combined
+percentage into a semantic quality score.
 
-### E2E Code or Name
+```bash
+python3 .codex/skills/neurovi-gap-scanner/scripts/document_health.py \
+  --repo neurovi-prd flow
 
-Resolve exact code, exact title, then unambiguous partial match. Show choices when ambiguous.
+python3 .codex/skills/neurovi-gap-scanner/scripts/document_health.py \
+  --repo neurovi-prd flow --e2e E2E-RJ
 
-Map:
+python3 .codex/skills/neurovi-gap-scanner/scripts/document_health.py \
+  --repo neurovi-prd all
+```
 
-- source flow and boundary status;
-- source-explicit document memberships;
-- user-confirmed include/context/take-off decisions when a workspace exists;
-- mechanical document candidates without calling them members;
-- nodes without document candidates;
-- missing confirmed context traces between stages/documents;
-- exact-content duplicates requiring source representation review;
-- open defects and skipped/deferred interview questions;
-- internal gap candidate counts for each related document.
-
-Report cross-document gaps separately from document-internal gaps. Never infer that two documents hand off data merely because their titles share tokens.
-
-### Document Code or Name
-
-Resolve an exact document ID first, then exact title/path, then an unambiguous partial match. Show candidate documents when ambiguous.
-
-Map:
-
-- source identity and provenance;
-- E2E relationships by evidence class;
-- detected section families;
-- context found under nonstandard headings;
-- missing section/context candidates;
-- explicit lexical gap markers such as `TBD` or `belum didefinisikan`;
-- open confirmed defects or interview questions referring to the document.
-
-Use these distinctions:
-
-- `SECTION_PRESENT`: matching context appears under a detected heading.
-- `CONTEXT_PRESENT_UNSTRUCTURED`: context terms exist, but no standard heading was detected.
-- `CONTEXT_GAP_CANDIDATE`: neither a matching heading nor mechanical context marker was found.
-- `EXPLICIT_GAP_MARKER_CANDIDATE`: source text contains an explicit unresolved marker.
-
-Do not claim context is absent solely because a standard heading is absent.
+The aggregate is read-only. A missing context family remains a mechanical
+review candidate, and the percentage describes detectable coverage only.
 
 ## Present Findings
 
 For every scan:
 
-1. Lead with scope and evidence limitations.
-2. Separate confirmed gaps from mechanical candidates.
-3. Include evidence references and counts.
-4. Recommend the next scan depth or reconciliation target.
-5. When resolution is requested, invoke `$neurovi-prd-reconciler` with the selected E2E/document and the scanner findings.
+1. Lead with the selected scanner and its scope.
+2. State what the scanner intentionally excludes.
+3. Separate source-explicit conflicts from mechanical candidates.
+4. Use operational language before internal taxonomy codes.
+5. Recommend the relevant next action: inspect a specific handoff for Scanner 1,
+   or inspect a specific PRD/case family for Scanner 2.
+6. If resolution is requested, invoke `$neurovi-prd-reconciler` with the selected
+   E2E and only the scanner output matching the selected reconciliation mode.
 
-Use `assets/gap-scan-report-template.md` when saving a scan report. Read `references/usage-guide.md` for invocation examples. Scanner results do not change the approved global Git version.
+Read `references/usage-guide.md` for examples. Scanner results never modify the
+approved global Git version.

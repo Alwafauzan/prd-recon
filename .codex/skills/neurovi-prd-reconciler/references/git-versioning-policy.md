@@ -13,7 +13,10 @@ Use annotated tags with this format:
 v<major>.<minor>.<patch>
 ```
 
-Start the first approved repository baseline at `v0.0.1`. Do not assign independent release versions to individual PRDs or E2Es. A document keeps a stable document code, provenance, and checksum.
+Canonical bootstrap `v0.0.0` is the unreleased initial baseline generated
+losslessly from original PRDs. Start the first approved and tagged repository
+baseline at `v0.0.1`. Do not assign independent release versions to individual
+PRDs or E2Es. A document keeps a stable document code, provenance, and checksum.
 
 ## Release Artifacts
 
@@ -77,13 +80,19 @@ Use `scripts/version_diff.py` for a normalized file-level report.
 Do not create a release tag for:
 
 - mechanical candidate regeneration;
-- unconfirmed document or E2E selection;
+- automatic domain routing, owner-worklist membership, or historical unconfirmed selection;
 - format and defect scans;
 - open decision questions;
 - working reconciliation sessions;
 - references that have not changed the approved canonical baseline.
 
 Normal working commits may exist but remain `UNRELEASED`.
+
+An automatic `RESOLVED_BY_SOURCE_FACT` trace may update working canonical E2E
+context without a semantic decision because it only records explicit,
+non-conflicting eligible source evidence. It remains `UNRELEASED` and cannot
+create a tag until the normal global baseline gate receives explicit
+`BASELINE_APPROVAL`.
 
 ## Baseline Gate
 
@@ -126,7 +135,10 @@ For every changed document, `changes.md` must show:
 - functional scope impact: `NONE`, `CONTEXT_ONLY`, or `FORMAL_CHANGE`;
 - related resolved and open defects.
 
-The initial `v0.0.1` report treats every canonical document as `ADDED` and records that no previous version exists.
+The initial `v0.0.1` report compares against canonical bootstrap `v0.0.0`. It
+records bootstrap documents as the initial inventory and highlights only
+approved differences introduced after bootstrap. `v0.0.0` is identified by the
+canonical manifest checksum rather than an annotated Git tag.
 
 ## Consumer Lock
 

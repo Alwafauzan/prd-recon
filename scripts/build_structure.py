@@ -1337,6 +1337,50 @@ def validate(source: Path, target: Path, quiet: bool = False) -> dict[str, Any]:
             json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             errors.append(f"JSON tidak valid {relative}: {exc}")
+    worklist_path = target / "reconciliation/e2e-inventory/domain-worklist.json"
+    if not worklist_path.is_file():
+        errors.append("Inventaris E2E domain worklist hilang: reconciliation/e2e-inventory/domain-worklist.json")
+    else:
+        try:
+            worklist = json.loads(worklist_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"JSON tidak valid reconciliation/e2e-inventory/domain-worklist.json: {exc}")
+        else:
+            if worklist.get("inventory_type") != "E2E_DOMAIN_WORKLIST":
+                errors.append("Tipe inventaris E2E tidak valid")
+            if worklist.get("eligible_file_count") != 212:
+                errors.append(
+                    f"Jumlah file PRD eligible tidak valid: {worklist.get('eligible_file_count')}"
+                )
+            if worklist.get("unique_prd_count") != 209:
+                errors.append(
+                    f"Jumlah PRD unik tidak valid: {worklist.get('unique_prd_count')}"
+                )
+            if worklist.get("assigned_unique_prd_count") != worklist.get("unique_prd_count"):
+                errors.append("Tidak semua PRD unik memiliki owner domain")
+            if worklist.get("unassigned_unique_prd_count") != 0:
+                errors.append("Inventaris masih memiliki PRD tanpa owner domain")
+            content_ids = [
+                item.get("content_id", "")
+                for domain in worklist.get("domains", [])
+                for item in domain.get("documents", [])
+            ]
+            if len(content_ids) != len(set(content_ids)):
+                errors.append("Satu PRD unik tercatat pada lebih dari satu owner domain")
+            if len(content_ids) != worklist.get("unique_prd_count"):
+                errors.append(
+                    "Jumlah item domain worklist tidak sama dengan jumlah PRD unik"
+                )
+            known = set(content_ids)
+            for relation in worklist.get("relations", []):
+                if relation.get("source_content_id") not in known:
+                    errors.append(
+                        f"Relasi menunjuk source PRD tidak dikenal: {relation.get('relation_id')}"
+                    )
+                if relation.get("target_content_id") not in known:
+                    errors.append(
+                        f"Relasi menunjuk target PRD tidak dikenal: {relation.get('relation_id')}"
+                    )
     result = {
         "valid": not errors,
         "source_file_count": len(actual_files),

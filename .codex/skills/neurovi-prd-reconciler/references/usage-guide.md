@@ -5,7 +5,7 @@
 When repository-local skills are discoverable, invoke:
 
 ```text
-Use $neurovi-prd-reconciler untuk rekonsiliasi E2E-ADM-01.
+Use $neurovi-prd-reconciler untuk rekonsiliasi E2E-RJ.
 ```
 
 When the root-level skill is not automatically discovered, invoke it by path:
@@ -14,12 +14,30 @@ When the root-level skill is not automatically discovered, invoke it by path:
 Baca dan gunakan .codex/skills/neurovi-prd-reconciler/SKILL.md untuk rekonsiliasi E2E yang saya pilih.
 ```
 
+## Choose the Reconciliation Process
+
+Always choose one process; do not run a combined interview.
+
+```text
+Rekonsiliasi alur utama Rawat Jalan. Bahas hanya trigger, urutan utama,
+handoff, output, status, dan kelanjutan lintas domain.
+```
+
+```text
+Rekonsiliasi detail proses Rawat Jalan. Bahas hanya skenario, kondisi, aturan,
+validasi, error, pengecualian, dan acceptance criteria.
+```
+
+In Discord, choose **Perbaiki alur utama** or **Perbaiki detail proses**.
+Use **Lanjut alur utama** or **Lanjut detail proses** to resume the matching
+session. Both processes may exist for the same E2E without overwriting each other.
+
 ## Typical Workflow
 
 ### Select an E2E
 
 ```text
-Gunakan $neurovi-prd-reconciler. Tampilkan kandidat E2E yang berhubungan dengan pendaftaran rawat jalan, tetapi jangan tetapkan pilihan sebelum saya konfirmasi.
+Gunakan $neurovi-prd-reconciler untuk Rawat Jalan. Pakai semua PRD owner-domain sebagai worklist otomatis dan mulai dari gap alur yang benar-benar membutuhkan keputusan bisnis.
 ```
 
 The skill resolves the code or name and asks the user to confirm ambiguous matches.
@@ -27,10 +45,15 @@ The skill resolves the code or name and asks the user to confirm ambiguous match
 ### Review Documents
 
 ```text
-Tampilkan source flow, explicit membership, kandidat mekanis, dan reference tambahan secara terpisah. Saya akan memilih include, context only, take off, atau deferred.
+Tampilkan owner-domain PRD, relasi lintas domain, kandidat relasi mekanis, dan reference tambahan secara terpisah. Jangan meminta konfirmasi domain atau klasifikasi setiap owner PRD.
 ```
 
-Candidates remain candidates until the user decides.
+Owner PRDs are loaded automatically. Mechanical relations remain reasoning
+candidates until source evidence or a semantic user decision supports them.
+The runtime reads each owner PRD from the verified lossless canonical baseline
+and stops if that canonical document is stale or no longer complete and
+byte-identical to the original payload. Canonical E2E supplies the worklist and
+relationship map without converting mechanical relations into facts.
 
 ### Promote and Normalize a PRD
 
@@ -51,7 +74,7 @@ The skill must explain why another domain may be stronger and warn about illogic
 ### Review Defects
 
 ```text
-Scan dokumen yang sudah saya include. Tampilkan defect alur dan data yang memerlukan keputusan saya. Jangan usulkan requirement baru sebagai fakta.
+Scan semua PRD owner-domain. Tampilkan hanya defect alur dan data yang memerlukan keputusan saya. Jangan usulkan requirement baru sebagai fakta.
 ```
 
 Each defect includes evidence and a neutral decision question.
@@ -78,6 +101,13 @@ Untuk setiap gap flow, tampilkan dua atau tiga opsi penyelesaian, dampak flow da
 Terapkan hanya keputusan dengan status USER_CONFIRMED. Biarkan gap lain tetap terbuka.
 ```
 
+### Stop a Working Session
+
+In Discord, use the **Akhiri sesi** button on the active reconciliation card.
+Confirm the stop action when prompted. Previous answers remain in the audit,
+the current unanswered question remains open, and no baseline, commit, tag, or
+push is created. Start the same E2E again later to create a new working session.
+
 ### Baseline
 
 ```text
@@ -94,26 +124,27 @@ python3 .codex/skills/neurovi-prd-reconciler/scripts/version_diff.py --repo neur
 
 ## User Decision Vocabulary
 
-- `include`: confirm the document as part of the E2E scope or context.
-- `context only`: retain context without adding work scope.
-- `take off`: exclude from the E2E while keeping the audit record.
-- `deferred`: postpone the decision.
 - `approve rename`: approve only the derived filename/title/code change.
 - `approve decision`: allow the recorded decision to affect the baseline.
 - `accept as is`: retain a known gap or defect without changing the PRD.
 - `skip`: continue the interview while preserving the unanswered question.
+- `deferred`: postpone a functional or semantic decision.
 - `confirm correlation`: allow a later answer to resolve a specific earlier question or gap.
 - `keep gap open`: retain the gap because available evidence is insufficient.
 
 ## Reading the Output
 
 - `SOURCE_FACT` is safe baseline evidence.
-- `CROSS_SOURCE_FACT` requires a visible source reference.
+- `CROSS_SOURCE_FACT` requires a visible reference to another eligible `.md`
+  PRD beneath `source/original/PRD/PRD Generator (.md)/`.
+- Other files may support reasoning and discovery but cannot be labeled
+  `SOURCE_FACT` or `CROSS_SOURCE_FACT`.
 - `USER_CONFIRMED` requires a decision ID.
-- `MECHANICAL_CANDIDATE` is a search result, not membership.
+- `MECHANICAL_CANDIDATE` is a relation/search proposal, not a confirmed relationship.
 - `GAP`, `AMBIGUOUS`, and `CONFLICT` require review.
-- `TAKE_OFF` means excluded by decision, not deleted.
+- Historical `TAKE_OFF` means excluded by an older decision, not deleted; the
+  normal owner-worklist flow no longer asks for this classification.
 
 ## Important Note
 
-All codes, names, and processes in usage examples are illustrative invocation patterns. They do not establish repository truth or approve an E2E boundary.
+All codes, names, and processes in usage examples are illustrative invocation patterns. They do not approve a domain assignment or relationship.

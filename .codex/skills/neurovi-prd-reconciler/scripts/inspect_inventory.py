@@ -5,7 +5,6 @@ import argparse
 import csv
 import json
 import sys
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +13,13 @@ class InventoryError(RuntimeError):
     pass
 
 
+INVENTORY_PATH = Path("reconciliation/e2e-inventory/domain-worklist.json")
+DOCUMENT_INDEX_PATH = Path("reconciliation/e2e-inventory/document-domain-index.csv")
+
+
 def default_repo() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / "catalog/document-index.json").is_file() and (parent / "reconciliation").is_dir():
+        if (parent / INVENTORY_PATH).is_file():
             return parent
     return Path.cwd()
 
@@ -27,71 +30,45 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def load_domains(repo: Path) -> list[dict[str, Any]]:
-    path = repo / "reconciliation/e2e-inventory/e2e-domain-inventory.json"
-    return read_json(path).get("domains", [])
+def load_inventory(repo: Path) -> dict[str, Any]:
+    value = read_json(repo / INVENTORY_PATH)
+    if value.get("inventory_type") != "E2E_DOMAIN_WORKLIST":
+        raise InventoryError("The active inventory is not an E2E domain worklist.")
+    return value
 
 
 def load_documents(repo: Path) -> list[dict[str, Any]]:
-    path = repo / "catalog/document-index.json"
-    return read_json(path).get("documents", [])
+    return read_json(repo / "catalog/document-index.json").get("documents", [])
 
 
-def load_coverage(repo: Path) -> dict[str, dict[str, str]]:
-    path = repo / "reconciliation/e2e-inventory/document-e2e-coverage.csv"
+def load_document_index(repo: Path) -> list[dict[str, str]]:
+    path = repo / DOCUMENT_INDEX_PATH
     if not path.is_file():
-        return {}
+        raise InventoryError(f"Required inventory file not found: {path}")
     with path.open(encoding="utf-8-sig", newline="") as handle:
-        return {row["document_id"]: row for row in csv.DictReader(handle)}
+        return list(csv.DictReader(handle))
 
 
 def resolve_domain(query: str, domains: list[dict[str, Any]]) -> dict[str, Any]:
     folded = query.casefold().strip()
-    exact_code = [item for item in domains if item.get("e2e_code", "").casefold() == folded]
-    if len(exact_code) == 1:
-        return exact_code[0]
-    exact_title = [item for item in domains if item.get("title", "").casefold() == folded]
-    if len(exact_title) == 1:
-        return exact_title[0]
+    exact = [item for item in domains if item.get("e2e_code", "").casefold() == folded]
+    if len(exact) == 1:
+        return exact[0]
+    exact = [item for item in domains if item.get("title", "").casefold() == folded]
+    if len(exact) == 1:
+        return exact[0]
     partial = [
         item
         for item in domains
-        if folded in item.get("e2e_code", "").casefold() or folded in item.get("title", "").casefold()
+        if folded in item.get("e2e_code", "").casefold()
+        or folded in item.get("title", "").casefold()
     ]
     if len(partial) == 1:
         return partial[0]
     if partial:
         choices = ", ".join(f"{item['e2e_code']} ({item['title']})" for item in partial)
-        raise InventoryError(f"Ambiguous E2E query. Confirm one of: {choices}")
-    raise InventoryError(f"No E2E matches: {query}")
-
-
-def aggregate_candidates(domain: dict[str, Any]) -> list[dict[str, Any]]:
-    grouped: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    for candidate in domain.get("flow_title_candidates", []):
-        grouped[candidate["candidate_document_id"]].append({**candidate, "matched_context": "PROCESS_TITLE"})
-    for node in domain.get("nodes", []):
-        for candidate in node.get("document_candidates", []):
-            grouped[candidate["candidate_document_id"]].append(
-                {**candidate, "matched_context": node.get("node_label", node.get("node_id", ""))}
-            )
-
-    rows = []
-    for document_id, matches in grouped.items():
-        first = matches[0]
-        rows.append(
-            {
-                "document_id": document_id,
-                "title": first.get("candidate_title", ""),
-                "source_path": first.get("source_path", ""),
-                "artifact_type": first.get("artifact_type", ""),
-                "max_score": max(int(item.get("match_score", 0)) for item in matches),
-                "candidate_statuses": sorted({item.get("candidate_status", "") for item in matches}),
-                "matched_contexts": sorted({item.get("matched_context", "") for item in matches}),
-                "relationship_status": "MECHANICAL_CANDIDATE",
-            }
-        )
-    return sorted(rows, key=lambda item: (-item["max_score"], item["title"].casefold(), item["document_id"]))
+        raise InventoryError(f"Ambiguous E2E domain. Confirm one of: {choices}")
+    raise InventoryError(f"No E2E domain matches: {query}")
 
 
 def command_list_e2e(repo: Path) -> list[dict[str, Any]]:
@@ -101,62 +78,106 @@ def command_list_e2e(repo: Path) -> list[dict[str, Any]]:
             "title": item.get("title", ""),
             "status": item.get("status", ""),
             "origin": item.get("origin", ""),
-            "explicit_membership_count": item.get("explicit_membership_count", 0),
-            "candidate_match_count": item.get("candidate_match_count", 0),
+            "document_count": item.get("document_count", 0),
+            "relation_count": item.get("relation_count", 0),
+            "cross_domain_relation_count": item.get("cross_domain_relation_count", 0),
+            "review_required_count": item.get("review_required_count", 0),
         }
-        for item in sorted(load_domains(repo), key=lambda row: row.get("e2e_code", ""))
+        for item in sorted(load_inventory(repo)["domains"], key=lambda row: row.get("e2e_code", ""))
     ]
 
 
 def command_show_e2e(repo: Path, query: str) -> dict[str, Any]:
-    domain = resolve_domain(query, load_domains(repo))
+    inventory = load_inventory(repo)
+    domain = resolve_domain(query, inventory["domains"])
+    relation_ids = set(domain.get("relation_ids", []))
+    relations = [row for row in inventory.get("relations", []) if row.get("relation_id") in relation_ids]
+    mapped_documents = []
+    for item in domain.get("documents", []):
+        mapped_documents.append(
+            {
+                "document_id": item.get("document_id", ""),
+                "content_id": item.get("content_id", ""),
+                "title": item.get("title", ""),
+                "source_path": item.get("source_path", ""),
+                "relationship_evidence": ["OWNER_DOMAIN"],
+                "worklist_status": "OWNER_WORKLIST",
+                "relationship_role": "PRIMARY_SCOPE",
+                "worklist_stage": item.get("worklist_stage", ""),
+                "worklist_order": item.get("worklist_order"),
+                "assignment_status": item.get("assignment_status", ""),
+                "assignment_confidence": item.get("assignment_confidence", ""),
+                "review_status": item.get("review_status", ""),
+                "source_representations": item.get("source_representations", []),
+                "flow_checks": item.get("flow_checks", {}),
+            }
+        )
+    related = {}
+    owner_ids = {item["content_id"] for item in mapped_documents}
+    document_by_content = {
+        document.get("content_id", ""): document for document in load_document_index(repo)
+    }
+    for relation in relations:
+        for side, role in (("source", "UPSTREAM"), ("target", "DOWNSTREAM")):
+            content_id = relation.get(f"{side}_content_id", "")
+            if not content_id or content_id in owner_ids:
+                continue
+            row = document_by_content.get(content_id, {})
+            relationship = related.setdefault(
+                content_id,
+                {
+                    "document_id": row.get("representative_document_id", relation.get(f"{side}_document_id", "")),
+                    "content_id": content_id,
+                    "title": row.get("representative_title", relation.get(f"{side}_title", "")),
+                    "source_path": row.get("representative_source_path", ""),
+                    "relationship_evidence": [],
+                    "worklist_status": "RELATED_CONTEXT",
+                    "relationship_role": role,
+                    "owner_domain_code": row.get("owner_domain_code", relation.get(f"{side}_domain_code", "")),
+                    "selectable_source_document": True,
+                },
+            )
+            relationship["relationship_evidence"].append(relation["relation_id"])
+    mapped_documents.extend(related.values())
     return {
         "e2e_code": domain.get("e2e_code", ""),
         "title": domain.get("title", ""),
         "status": domain.get("status", ""),
         "origin": domain.get("origin", ""),
-        "boundary_warning": "Candidate until explicitly confirmed by the user",
-        "source_flow": {
-            "document_id": domain.get("flow_document_id", ""),
-            "source_path": domain.get("source_path", ""),
-        },
-        "explicit_memberships": domain.get("explicit_memberships", []),
-        "mechanical_candidates": aggregate_candidates(domain),
-        "nodes": [
-            {
-                "node_order": node.get("node_order"),
-                "node_id": node.get("node_id", ""),
-                "node_label": node.get("node_label", ""),
-            }
-            for node in domain.get("nodes", [])
-        ],
-        "edges": domain.get("edges", []),
+        "routing_note": (
+            "Domain and owner PRDs are automatic flow-checking routes. Assignment "
+            "metadata is not a source fact and does not require user confirmation."
+        ),
+        "purpose": domain.get("purpose", ""),
+        "document_count": domain.get("document_count", 0),
+        "relation_count": domain.get("relation_count", 0),
+        "cross_domain_relation_count": domain.get("cross_domain_relation_count", 0),
+        "worklist": domain.get("documents", []),
+        "mapped_documents": mapped_documents,
+        "relations": relations,
+        "explicit_memberships": [],
+        "mechanical_candidates": [],
+        "nodes": [],
+        "edges": [],
     }
 
 
 def command_find_document(repo: Path, query: str) -> list[dict[str, Any]]:
     folded = query.casefold().strip()
-    coverage = load_coverage(repo)
-    matches = []
-    for document in load_documents(repo):
-        values = [document.get("document_id", ""), document.get("title", ""), document.get("source_path", "")]
+    rows = []
+    for item in load_document_index(repo):
+        values = (
+            item.get("representative_document_id", ""),
+            item.get("source_document_ids", ""),
+            item.get("representative_title", ""),
+            item.get("representative_source_path", ""),
+            item.get("source_paths", ""),
+            item.get("content_id", ""),
+        )
         if not any(folded in value.casefold() for value in values):
             continue
-        coverage_row = coverage.get(document.get("document_id", ""), {})
-        matches.append(
-            {
-                "document_id": document.get("document_id", ""),
-                "content_id": document.get("content_id", ""),
-                "title": document.get("title", ""),
-                "source_path": document.get("source_path", ""),
-                "extension": document.get("extension", ""),
-                "coverage_status": coverage_row.get("coverage_status", ""),
-                "explicit_process_ids": coverage_row.get("explicit_process_ids", ""),
-                "mechanical_candidate_e2e_codes": coverage_row.get("mechanical_candidate_e2e_codes", ""),
-                "source_flow_e2e_codes": coverage_row.get("source_flow_e2e_codes", ""),
-            }
-        )
-    return sorted(matches, key=lambda item: (item["title"].casefold(), item["source_path"].casefold()))
+        rows.append(item)
+    return sorted(rows, key=lambda item: (item["owner_domain_code"], item["representative_title"].casefold()))
 
 
 FORMAT_FAMILIES = {
@@ -178,19 +199,21 @@ def command_scan_format(repo: Path, document_id: str) -> dict[str, Any]:
     document = documents[document_id]
     headings = [item.get("text", "") for item in document.get("headings", [])]
     joined = "\n".join(headings).casefold()
-    family_results = {}
-    for family, tokens in FORMAT_FAMILIES.items():
-        family_results[family] = {
-            "status": "PRESENT" if any(token in joined for token in tokens) else "FORMAT_GAP_CANDIDATE",
-            "matched_headings": [heading for heading in headings if any(token in heading.casefold() for token in tokens)],
-        }
     return {
         "document_id": document_id,
         "title": document.get("title", ""),
         "source_path": document.get("source_path", ""),
         "warning": "A missing heading is a format-gap candidate, not proof that source context is absent.",
         "heading_count": len(headings),
-        "format_families": family_results,
+        "format_families": {
+            family: {
+                "status": "PRESENT" if any(token in joined for token in tokens) else "FORMAT_GAP_CANDIDATE",
+                "matched_headings": [
+                    heading for heading in headings if any(token in heading.casefold() for token in tokens)
+                ],
+            }
+            for family, tokens in FORMAT_FAMILIES.items()
+        },
     }
 
 
@@ -209,27 +232,22 @@ def print_markdown(value: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Read-only Neurovi E2E and PRD inventory inspector")
-    parser.add_argument("--repo", type=Path, default=default_repo(), help="Neurovi PRD repository root")
-    parser.add_argument("--json", action="store_true", help="Print JSON")
+    parser = argparse.ArgumentParser(description="Read-only Neurovi E2E domain worklist inspector")
+    parser.add_argument("--repo", type=Path, default=default_repo())
+    parser.add_argument("--json", action="store_true")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    subparsers.add_parser("list-e2e", help="List E2E candidates")
-
-    show_e2e = subparsers.add_parser("show-e2e", help="Show one E2E and separated evidence classes")
-    show_e2e.add_argument("--e2e", required=True, help="E2E code or name")
-
-    find_document = subparsers.add_parser("find-document", help="Find documents by ID, title, or path")
+    subparsers.add_parser("list-e2e", help="List E2E domain worklists")
+    show_e2e = subparsers.add_parser("show-e2e", help="Show one E2E domain worklist")
+    show_e2e.add_argument("--e2e", required=True)
+    find_document = subparsers.add_parser("find-document", help="Find eligible PRDs and their owner domain")
     find_document.add_argument("--query", required=True)
-
-    scan_format = subparsers.add_parser("scan-format", help="Scan source heading families without editing")
-    scan_format.add_argument("--document", required=True, help="Document ID")
+    scan_format = subparsers.add_parser("scan-format", help="Scan source heading families")
+    scan_format.add_argument("--document", required=True)
     return parser
 
 
 def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
+    args = build_parser().parse_args()
     repo = args.repo.resolve()
     try:
         if args.command == "list-e2e":
@@ -243,7 +261,6 @@ def main() -> int:
     except (InventoryError, json.JSONDecodeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

@@ -1,4 +1,4 @@
 interface:
   display_name: "Neurovi Show E2E"
-  short_description: "Display the Neurovi E2E inventory"
-  default_prompt: "Use $neurovi-show-e2e to display the current E2E process inventory."
+  short_description: "Display Neurovi E2E domain worklists"
+  default_prompt: "Use $neurovi-show-e2e to display the current E2E domain worklist inventory."

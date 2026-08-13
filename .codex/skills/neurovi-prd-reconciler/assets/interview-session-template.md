@@ -1,5 +1,7 @@
 # Reconciliation Interview - <E2E Code>
 
+- Reconciliation mode: `<RECONCILIATION_MODE>`
+
 ## Interview Control
 
 | Field | Value |

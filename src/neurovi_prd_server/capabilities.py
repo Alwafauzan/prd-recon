@@ -114,10 +114,16 @@ def _gap(
         "--repo",
         str(repo),
     ]
-    if mode == "e2e":
-        command.extend(["--e2e", _required(params, "e2e")])
-    elif mode == "prd":
-        command.extend(["--document", _required(params, "document")])
+    if mode == "main-flow":
+        command.extend(["main-flow", "--e2e", _required(params, "e2e")])
+    elif mode == "business-cases-e2e":
+        command.extend(["business-cases", "--e2e", _required(params, "e2e")])
+    elif mode == "business-cases-prd":
+        command.extend(
+            ["business-cases", "--document", _required(params, "document")]
+        )
+    else:
+        raise CapabilityError(f"Unsupported gap scanner mode: {mode}")
     return command
 
 
@@ -181,6 +187,27 @@ def _validate(repo: Path, tools: Path, params: Mapping[str, str]) -> list[str]:
     ]
 
 
+def _document_health(
+    repo: Path,
+    tools: Path,
+    params: Mapping[str, str],
+    report: str,
+) -> list[str]:
+    command = [
+        sys.executable,
+        _script(
+            tools,
+            ".codex/skills/neurovi-gap-scanner/scripts/document_health.py",
+        ),
+        "--repo",
+        str(repo),
+        report,
+    ]
+    if report == "flow" and params.get("e2e", "").strip():
+        command.extend(["--e2e", params["e2e"].strip()])
+    return command
+
+
 CAPABILITIES: dict[str, CapabilitySpec] = {
     "prd.list": CapabilitySpec(
         "prd.list",
@@ -198,38 +225,60 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "e2e.list": CapabilitySpec(
         "e2e.list",
-        "List E2E inventory candidates",
+        "List E2E domain worklists",
         "read",
         ("query", "group", "status", "limit"),
         lambda repo, tools, params: _show_e2e(repo, tools, params, False),
     ),
     "e2e.show": CapabilitySpec(
         "e2e.show",
-        "Display one E2E flow",
+        "Display one E2E domain worklist and its relations",
         "read",
         ("e2e",),
         lambda repo, tools, params: _show_e2e(repo, tools, params, True),
     ),
-    "gap.list": CapabilitySpec(
-        "gap.list",
-        "List E2E flows with gap candidates",
-        "read",
-        (),
-        lambda repo, tools, params: _gap(repo, tools, params, "list"),
-    ),
-    "gap.e2e": CapabilitySpec(
-        "gap.e2e",
-        "Scan cross-document gaps in one E2E",
+    "gap.main-flow": CapabilitySpec(
+        "gap.main-flow",
+        "Scan continuity of one E2E main business flow",
         "read",
         ("e2e",),
-        lambda repo, tools, params: _gap(repo, tools, params, "e2e"),
+        lambda repo, tools, params: _gap(repo, tools, params, "main-flow"),
     ),
-    "gap.prd": CapabilitySpec(
-        "gap.prd",
-        "Scan internal context gaps in one PRD",
+    "gap.business-cases-e2e": CapabilitySpec(
+        "gap.business-cases-e2e",
+        "Scan detailed business cases across owner PRDs in one E2E",
+        "read",
+        ("e2e",),
+        lambda repo, tools, params: _gap(
+            repo, tools, params, "business-cases-e2e"
+        ),
+    ),
+    "gap.business-cases-prd": CapabilitySpec(
+        "gap.business-cases-prd",
+        "Scan detailed business cases in one original PRD",
         "read",
         ("document",),
-        lambda repo, tools, params: _gap(repo, tools, params, "prd"),
+        lambda repo, tools, params: _gap(
+            repo, tools, params, "business-cases-prd"
+        ),
+    ),
+    "health.documents-flow": CapabilitySpec(
+        "health.documents-flow",
+        "Show read-only document health statistics per business flow",
+        "read",
+        ("e2e",),
+        lambda repo, tools, params: _document_health(
+            repo, tools, params, "flow"
+        ),
+    ),
+    "health.documents-all": CapabilitySpec(
+        "health.documents-all",
+        "Show read-only overall document health statistics",
+        "read",
+        (),
+        lambda repo, tools, params: _document_health(
+            repo, tools, params, "all"
+        ),
     ),
     "inventory.find-prd": CapabilitySpec(
         "inventory.find-prd",

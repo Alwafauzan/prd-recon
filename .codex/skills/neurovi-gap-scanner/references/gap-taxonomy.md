@@ -1,66 +1,101 @@
-# Neurovi Gap Scanner Taxonomy
+# Neurovi Two-Scanner Taxonomy
 
 ## Evidence Classes
 
-- `USER_CONFIRMED_GAP`: recorded in a reconciliation defect or interview register.
-- `SOURCE_EXPLICIT_GAP`: the source explicitly states an unresolved item.
-- `MECHANICAL_GAP_CANDIDATE`: inferred only from missing structure, mappings, traces, or literal markers.
+- `SOURCE_EXPLICIT_GAP`: source-explicit conflict or unresolved statement.
+- `USER_CONFIRMED_GAP`: recorded semantic gap or unresolved user decision.
+- `MECHANICAL_GAP_CANDIDATE`: inferred from inventory checks, missing context
+  families, or incomplete indexed evidence.
+- `MECHANICAL_STRUCTURE_EVIDENCE`: a heading or literal term mechanically
+  indicates that a context family is present.
 
-Only the first two may be described as known gaps. Mechanical findings require review.
+Only source-explicit and user-confirmed findings may be described as known gaps.
+Mechanical findings require source review.
 
-## E2E Gap Types
+## Scanner 1: Main Business Flow
 
-- `UNCONFIRMED_E2E_BOUNDARY`: the E2E still comes from an unapproved source-flow candidate.
-- `NO_EXPLICIT_DOCUMENT_MEMBERSHIP`: no source-explicit document membership is attached.
-- `NO_CONFIRMED_DOCUMENT_SELECTION`: no user-confirmed include/context selection exists.
-- `FLOW_NODE_WITHOUT_DOCUMENT_CANDIDATE`: a source flow node has no mechanical document candidate.
-- `MECHANICAL_CANDIDATES_UNREVIEWED`: document candidates exist but have not been reviewed.
-- `NO_CONFIRMED_CONTEXT_TRACE`: no confirmed stage/document handoff trace exists.
-- `DUPLICATE_CONTENT_REVIEW_REQUIRED`: multiple related document IDs share one content ID.
-- `OPEN_RECONCILIATION_DEFECT`: an open confirmed defect exists.
-- `SKIPPED_OR_DEFERRED_QUESTION`: an interview question remains unresolved.
+### Scope
 
-## Cross-Document Gap Types
+- `trigger_input`
+- `sequence`
+- `handoff`
+- `output`
+- `status_transition`
+- source-explicit `ENTRY_POINT_TO`, `PRODUCES`, `HANDOFF_TO`, and `ACTIVATES`
+  relations
+- cross-domain continuation and source-explicit flow conflicts
 
-- `BROKEN_OR_UNTRACED_HANDOFF`
-- `UNMAPPED_HANDOFF_ENDPOINT`: one side of a source-flow edge has no document candidate.
-- `UNCONFIRMED_DOCUMENT_HANDOFF`: both sides have document candidates but no approved context trace.
-- `UNDEFINED_INPUT_OUTPUT`
-- `UNDEFINED_DATA_OWNER`
-- `IDENTIFIER_OR_STATUS_NOT_TRACED`
-- `RELATIONSHIP_UNCONFIRMED`
-- `CONFLICTING_CONTEXT_CANDIDATE`
-- `SOURCE_REPRESENTATION_AMBIGUOUS`
+### Finding Types
 
-Report these only as confirmed when a register or explicit source supports them. Otherwise use `MECHANICAL_GAP_CANDIDATE`.
+- `TRIGGER_INPUT_REVIEW_REQUIRED`
+- `SEQUENCE_REVIEW_REQUIRED`
+- `HANDOFF_REVIEW_REQUIRED`
+- `OUTPUT_REVIEW_REQUIRED`
+- `STATUS_TRANSITION_REVIEW_REQUIRED`
+- `UNDEFINED_FLOW_HANDOFF_CONTEXT`
+- `CONFLICTING_FLOW_CONTEXT`
 
-## Document Context Families
+`REFERENCES` rows without trigger, input, output, status, or condition evidence
+are supporting context. Do not report every unverified reference as a broken
+handoff.
 
-- `PURPOSE_BACKGROUND`
-- `SCOPE`
+### Excluded Detail Families
+
 - `OUT_OF_SCOPE`
-- `ACTORS_STAKEHOLDERS`
-- `TRIGGER_PRECONDITIONS`
-- `MAIN_FLOW`
 - `ALTERNATE_FLOW`
 - `ERROR_EXCEPTION`
 - `CASES_CONDITIONS`
 - `BUSINESS_RULES`
+- `VALIDATION_BEHAVIOR`
+- `ACCEPTANCE_CRITERIA`
+
+## Scanner 2: Detailed Business Cases
+
+### Context Families
+
+- `OUT_OF_SCOPE`: excluded cases and feature boundaries.
+- `ALTERNATE_FLOW`: non-primary but valid paths.
+- `ERROR_EXCEPTION`: failures, exceptions, and recovery behavior.
+- `CASES_CONDITIONS`: scenario branches, preconditions, and case conditions.
+- `BUSINESS_RULES`: business constraints and decisions.
+- `VALIDATION_BEHAVIOR`: required values, invalid conditions, and validation response.
+- `ACCEPTANCE_CRITERIA`: observable completion or acceptance conditions.
+
+### Statuses
+
+- `SECTION_PRESENT`: matching context appears under a detected heading.
+- `CONTEXT_PRESENT_UNSTRUCTURED`: matching literal terms exist without a detected
+  standard heading.
+- `CONTEXT_GAP_CANDIDATE`: neither a matching heading nor the configured literal
+  context terms were detected.
+- `EXPLICIT_GAP_MARKER_CANDIDATE`: source text contains an unresolved marker.
+
+A missing family is a structural/context candidate. It does not prove that the
+business behavior is absent, because the PRD may express it using other wording.
+
+### Excluded Main-Flow Families
+
+- `PURPOSE_BACKGROUND`
+- `SCOPE`
+- `ACTORS_STAKEHOLDERS`
+- `TRIGGER_PRECONDITIONS`
+- `MAIN_FLOW`
 - `LOGICAL_DATA_FLOW`
 - `STATUS_LIFECYCLE`
 - `DEPENDENCIES_INTEGRATION`
-- `ACCEPTANCE_CRITERIA`
-
-A missing family is a structure/context candidate. The original PRD may express the information in prose or a nonstandard section.
 
 ## Severity
 
-- `HIGH`: confirmed defect, explicit unresolved marker affecting flow/data, or unconfirmed primary process boundary.
-- `MEDIUM`: missing confirmed handoff, membership, cases, conditions, data, or status context.
-- `LOW`: format inconsistency, naming inconsistency, or unreviewed weak correlation.
+- `HIGH`: source-explicit or user-confirmed conflict affecting flow, status, data,
+  validation, or patient/service continuation.
+- `MEDIUM`: mechanical missing handoff, scenario, rule, validation, error, or
+  acceptance context requiring review.
+- `LOW`: nonstandard structure or weak lexical evidence.
 
-Severity is for review prioritization only. It does not authorize a change.
+Severity prioritizes review only and never authorizes a document change.
 
 ## Resolution Boundary
 
-The scanner identifies and maps. `$neurovi-prd-reconciler` interviews the user, correlates answers, recommends gap-closure options, records decisions, and changes derived baselines after approval.
+The scanners identify and map. `$neurovi-prd-reconciler` interviews the user,
+correlates answers, recommends options, records decisions, and changes derived
+baselines only after approval.

@@ -182,7 +182,8 @@ class Settings:
         required = (
             self.repo_root / "AGENTS.md",
             self.repo_root / "catalog/document-index.json",
-            self.repo_root / "reconciliation/e2e-inventory/e2e-domain-inventory.json",
+            self.repo_root / "reconciliation/e2e-inventory/domain-worklist.json",
+            self.repo_root / "reconciliation/canonical/manifest.json",
         )
         missing = [str(path) for path in required if not path.is_file()]
         if missing:

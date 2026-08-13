@@ -1,63 +1,40 @@
 ---
 name: neurovi-show-e2e
-description: Display the read-only Neurovi SIMRS end-to-end process inventory from repository E2E source-flow artifacts. Use when users ask to list all E2E flows, show available E2E codes or names, filter E2Es by macro group or status, inspect one E2E flow and its literal nodes or edges, or identify source-explicit process and document memberships without running a gap scan or reconciliation.
+description: Display the read-only Neurovi SIMRS E2E domain worklist inventory built from eligible original Markdown PRDs. Use when users ask to list domains, show available E2E codes or names, filter worklists, inspect one domain's owned PRDs, or view indexed within-domain and cross-domain relationships without running a gap scan or reconciliation.
 ---
 
 # Neurovi Show E2E
 
 ## Contract
 
-Use this skill only to display the current E2E inventory.
+Use this skill only to display the active E2E domain worklist inventory.
 
 1. Read the tools `AGENTS.md` and `neurovi-prd/AGENTS.md`, then obey both.
-2. Treat `reconciliation/e2e-inventory/e2e-domain-inventory.json` as a rebuildable inventory derived from source flows and explicit user-controlled inputs.
-3. Treat the referenced Mermaid files under `source/original/` as source evidence for flow nodes and edges.
-4. Never use Graphify as source truth.
-5. Preserve inventory statuses exactly. Do not rename `SOURCE_FLOW_CANDIDATE` as confirmed, approved, or baselined.
-6. Keep source-explicit document memberships separate from mechanical document candidates.
-7. Never infer a new E2E boundary, document membership, handoff, or process order while displaying the list.
+2. Treat `reconciliation/e2e-inventory/domain-worklist.json` as the only active E2E inventory.
+3. Treat each domain as a worklist for checking flow continuity, not as a source-folder classification or Mermaid boundary.
+4. Every unique eligible PRD has one owner domain. Show cross-domain use through relation edges without duplicating ownership.
+5. Preserve exact assignment, relation, conflict, and review statuses.
+6. `MECHANICAL_PROPOSAL` and `REVIEW_REQUIRED` are routing and quality metadata, not user-approved facts and not approval gates for using the worklist.
+7. Never infer a new owner, relationship, flow order, or scope while displaying the inventory.
 8. Route gap analysis to `$neurovi-gap-scanner` and controlled changes to `$neurovi-prd-reconciler`.
 
 ## Run the Viewer
 
-Use the bundled script from the tools repository root:
-
 ```bash
-# List the complete E2E inventory.
 python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd
-
-# Show one E2E by exact code, exact name, or unambiguous partial name.
-python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --e2e E2E-ADM-01
-python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --e2e "Registration Rajal"
-
-# Filter the list.
-python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --group admisi-emr
-python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --status SOURCE_FLOW_WITH_EXPLICIT_PATH
+python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --e2e E2E-RJ
+python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --e2e "Rawat Inap"
+python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --group pelayanan-utama
 python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --query rawat
-
-# Machine-readable output.
 python3 .codex/skills/neurovi-show-e2e/scripts/show_e2e.py --repo neurovi-prd --json
 ```
 
-Change `--repo` only when the document repository is mounted elsewhere.
-
 ## Present the List
 
-For each E2E, show:
+For each domain, show its code, title, group, unique-PRD count, relation count, cross-domain relation count, and review-required count. Lead with the invariant that all unique PRDs have one owner domain.
 
-- E2E code and title;
-- macro group;
-- exact inventory status;
-- node and edge counts;
-- source-explicit membership count;
-- mechanical candidate-match count.
+## Present One Domain
 
-Lead with an evidence notice that the inventory contains candidate boundaries unless its exact status says otherwise. Group the default list by macro group.
-
-## Present One E2E
-
-Show source identity, status, nodes, literal edges, explicit process paths, and source-explicit document memberships. Label mechanical candidate counts as navigation candidates only; do not present them as included documents.
-
-If a selector matches multiple E2Es, return all choices and wait for the user to select one.
+Show the ordered PRD worklist, stage, flow-check fields requiring review, within-domain relations, cross-domain relations, evidence class, evidence reference, and conflict status. If a selector is ambiguous, show the choices and wait for the user.
 
 Read `references/usage-guide.md` for examples and interpretation rules.

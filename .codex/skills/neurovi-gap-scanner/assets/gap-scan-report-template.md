@@ -1,39 +1,43 @@
-# Gap Scan Report
+# Scanner Report
 
 ## Scan Control
 
 | Field | Value |
 |---|---|
-| Scan mode | `<ALL_E2E|E2E|DOCUMENT>` |
-| Parameter | `<NONE_OR_CODE_OR_NAME>` |
+| Scanner | `<MAIN_FLOW|BUSINESS_CASES>` |
+| Target | `<E2E_OR_DOCUMENT>` |
 | Repository version | `<GLOBAL_TAG_OR_UNRELEASED>` |
 | Generated at | `<ISO-8601>` |
 | Result authority | `DIAGNOSTIC_ONLY` |
 
-## Scope and Limitations
+## Selected Scope
 
-- Mechanical findings are candidates until reviewed.
-- Missing headings do not prove missing context.
-- Source documents remain immutable.
+State exactly which scanner was selected and what it intentionally excludes.
 
-## Confirmed Gaps
+## Source-Explicit Findings
 
-| Gap type | E2E/documents | Evidence | Status |
+| Finding | E2E/documents | Evidence | Recommended review |
 |---|---|---|---|
 |  |  |  |  |
 
-## Mechanical Gap Candidates
+## Mechanical Candidates
 
-| Gap type | E2E/documents | Evidence | Severity | Recommended next action |
-|---|---|---|---|---|
-|  |  |  |  |  |
+| Finding | E2E/documents | Evidence | Recommended review |
+|---|---|---|---|
+|  |  |  |  |
 
-## Document Mapping
+## Main-Flow Detail
 
-| Document | Relationship evidence | Approval status | Internal gap candidates |
-|---|---|---|---:|
-|  |  |  | 0 |
+Use only for `MAIN_FLOW`: ordered PRDs, trigger, sequence, handoff, output, status,
+and source-explicit flow relations.
+
+## Business-Case Detail
+
+Use only for `BUSINESS_CASES`: alternate scenarios, conditions, rules, validation,
+errors, exceptions, acceptance criteria, and explicit unresolved markers.
 
 ## Next Reconciliation Target
 
 `<E2E_OR_DOCUMENT_AND_REASON>`
+
+Scanner results are read-only. Missing structure is not proof of missing facts.
