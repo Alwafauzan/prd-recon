@@ -194,6 +194,71 @@ class DomainWorklistInventoryTests(unittest.TestCase):
             )
         )
 
+    def test_safe_operational_cross_domain_relations_are_source_explicit(self) -> None:
+        active = {
+            (row["source_title"], row["target_title"], row["relationship_type"])
+            for row in self.inventory["relations"]
+            if row["evidence_class"] == "CROSS_SOURCE_FACT"
+            and row["verification_status"] == "SOURCE_EXPLICIT"
+            and row["conflict_status"] == "NO_CONFLICT_IDENTIFIED"
+        }
+        expected = {
+            ("Dashboard Pelayanan IGD", "PRD — Transfer Internal", "ENTRY_POINT_TO"),
+            ("Dashboard Pelayanan IGD", "PRD — Order Hemodialisa", "ENTRY_POINT_TO"),
+            (
+                "PRD — Dashboard Pelayanan Rawat Inap Neurovi v2",
+                "PRD — Order Hemodialisa",
+                "ENTRY_POINT_TO",
+            ),
+            (
+                "Dashboard Pelayanan IGD",
+                "PRD — Order Pemeriksaan Laboratorium",
+                "ENTRY_POINT_TO",
+            ),
+            (
+                "PRD — Dashboard Pelayanan Rawat Inap Neurovi v2",
+                "PRD — Order Pemeriksaan Laboratorium",
+                "ENTRY_POINT_TO",
+            ),
+            (
+                "Dashboard Pelayanan IGD",
+                "PRD — Order Retur Obat dan Alat Kesehatan",
+                "ENTRY_POINT_TO",
+            ),
+            (
+                "PRD — Dashboard Pelayanan Rawat Inap Neurovi v2",
+                "PRD — Order Retur Obat dan Alat Kesehatan",
+                "ENTRY_POINT_TO",
+            ),
+            (
+                "PRD — Dashboard Retur Farmasi IGD dan Rawat Inap",
+                "PRD — Inventory: Informasi Stok",
+                "HANDOFF_TO",
+            ),
+        }
+        self.assertTrue(expected.issubset(active))
+
+    def test_ambiguous_billing_and_registration_targets_remain_review_only(self) -> None:
+        ambiguous_sources = {
+            "Order Tindakan VK",
+            "PRD — Order Retur Obat dan Alat Kesehatan",
+            "Product Requirement Document (PRD) — Jadwal Praktik",
+        }
+        ambiguous_targets = {
+            "PRD — Billing: Tagihan Pasien (G2)",
+            "PRD — Pendaftaran Rawat Jalan",
+        }
+        matching = [
+            row
+            for row in self.inventory["relations"]
+            if row["source_title"] in ambiguous_sources
+            and row["target_title"] in ambiguous_targets
+        ]
+        self.assertTrue(matching)
+        self.assertTrue(
+            all(row["verification_status"] == "REVIEW_REQUIRED" for row in matching)
+        )
+
     def test_supporting_sources_and_legacy_outputs_are_excluded(self) -> None:
         paths = {
             item["source_path"]
@@ -209,6 +274,18 @@ class DomainWorklistInventoryTests(unittest.TestCase):
             )
         )
         self.assertFalse((DOCUMENT_REPO / "reconciliation/inventory").exists())
+
+    def test_generated_inventory_csv_uses_lf_line_endings(self) -> None:
+        inventory_dir = DOCUMENT_REPO / "reconciliation/e2e-inventory"
+        generated = (
+            "document-domain-index.csv",
+            "document-relation-index.csv",
+            "domain-register.csv",
+            "duplicate-representations.csv",
+        )
+        for filename in generated:
+            path = inventory_dir / filename
+            self.assertNotIn(b"\r\n", path.read_bytes(), path.name)
 
 
 class LLMClientTests(unittest.TestCase):

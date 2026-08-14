@@ -186,7 +186,12 @@ def write_json(path: Path, value: Any) -> None:
 
 def write_csv(path: Path, fieldnames: Iterable[str], rows: Iterable[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=fieldnames,
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -480,6 +485,85 @@ def relation_row(
 def explicit_relations(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_suffix = {document["relative_primary_path"]: document for document in documents}
     rules = (
+        # Direct operational handoffs with unambiguous source wording and targets.
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-IGD.md",
+            "target": "Pelayanan (.md)/PRD_Transfer_Internal.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan IGD", "Form Transfer Internal"),
+            "min_line": 136,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Dashboard Pelayanan IGD menjadi entry point Form Transfer Internal.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-IGD.md",
+            "target": "Pelayanan (.md)/PRD-Order-Hemodialisa.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan IGD", "Rujuk ke Hemodialisa"),
+            "min_line": 10,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Aksi Rujuk ke Hemodialisa dijalankan dari Dashboard Pelayanan IGD.",
+            "output_context": "Order menampilkan pasien pada Dashboard Pelayanan Hemodialisa dengan status awal Menunggu Konfirmasi.",
+        },
+        {
+            "source": "Pelayanan (.md)/NV-171-PRD-Dashboard-Pelayanan-Rawat-Inap-Neurovi-v2-v1.2.md",
+            "target": "Pelayanan (.md)/PRD-Order-Hemodialisa.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan Rawat Inap", "Rujuk ke Hemodialisa"),
+            "min_line": 10,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Aksi Rujuk ke Hemodialisa dijalankan dari Dashboard Pelayanan Rawat Inap.",
+            "output_context": "Order menampilkan pasien pada Dashboard Pelayanan Hemodialisa dengan status awal Menunggu Konfirmasi.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-IGD.md",
+            "target": "Pelayanan (.md)/PRD-Order-Pemeriksaan-Laboratorium.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan IGD", "Entry point"),
+            "min_line": 100,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Pemeriksaan Penunjang menuju Laboratorium Klinik dimulai dari Dashboard Pelayanan IGD.",
+            "input_context": "Registrasi aktif pasien IGD.",
+        },
+        {
+            "source": "Pelayanan (.md)/NV-171-PRD-Dashboard-Pelayanan-Rawat-Inap-Neurovi-v2-v1.2.md",
+            "target": "Pelayanan (.md)/PRD-Order-Pemeriksaan-Laboratorium.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan Rawat Inap", "Entry point"),
+            "min_line": 100,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Pemeriksaan Penunjang menuju Laboratorium Klinik dimulai dari Dashboard Pelayanan Rawat Inap.",
+            "input_context": "Registrasi aktif pasien Rawat Inap.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-IGD.md",
+            "target": "Pelayanan (.md)/PRD-Order-Retur-Obat.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan IGD", "Entry point"),
+            "min_line": 107,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Dashboard Pelayanan IGD menjadi entry point Order Retur Obat.",
+            "input_context": "Konteks episode IGD.",
+        },
+        {
+            "source": "Pelayanan (.md)/NV-171-PRD-Dashboard-Pelayanan-Rawat-Inap-Neurovi-v2-v1.2.md",
+            "target": "Pelayanan (.md)/PRD-Order-Retur-Obat.md",
+            "evidence": "target",
+            "patterns": ("Dashboard Pelayanan Rawat Inap", "Entry point"),
+            "min_line": 107,
+            "type": "ENTRY_POINT_TO",
+            "trigger": "Dashboard Pelayanan Rawat Inap menjadi entry point Order Retur Obat.",
+            "input_context": "Konteks episode Rawat Inap.",
+        },
+        {
+            "source": "Pelayanan (.md)/PRD-Dashboard-Retur-Farmasi-IGD-Rawat-Inap.md",
+            "target": "inventory (.md)/prd-inventory-informasi-stok (2).md",
+            "evidence": "source",
+            "patterns": ("Inventory / Informasi Stok", "Menerima posting stok operasional"),
+            "min_line": 120,
+            "type": "HANDOFF_TO",
+            "output_context": "Inventory / Informasi Stok menerima posting stok operasional dan History Stock Retur Pasien hanya untuk item Milik Pasien non-racikan.",
+        },
         {
             "source": "Pelayanan (.md)/PRD-Dashboard-Pelayanan-RJ-v2.1.md",
             "target": "Pelayanan (.md)/PRD_Transfer_Internal.md",

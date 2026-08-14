@@ -134,6 +134,26 @@ def relation_context(relation: dict[str, Any]) -> str:
     return "<br>".join(table_text(item) for item in parts) or "-"
 
 
+def markdown_link(label: str, target: str) -> str:
+    return f"[{table_text(label)}](<{target}>)"
+
+
+def document_relation_rows(
+    *,
+    document_ids: set[str],
+    relations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return sorted(
+        [
+            relation
+            for relation in relations
+            if str(relation.get("source_document_id", "")) in document_ids
+            or str(relation.get("target_document_id", "")) in document_ids
+        ],
+        key=lambda relation: str(relation.get("relation_id", "")),
+    )
+
+
 def source_path(repo: Path, relative: str) -> Path:
     if not relative.startswith(PRIMARY_SOURCE_PREFIX) or not relative.endswith(".md"):
         raise BaselineError(f"Ineligible primary source path: {relative}")
@@ -237,6 +257,8 @@ def render_document(
     document: dict[str, Any],
     source_sha256: str,
     mappings: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    code_by_document_id: dict[str, str],
 ) -> bytes:
     representations = document.get("source_representations", [])
     source_ids = [str(item.get("document_id", "")) for item in representations]
@@ -245,6 +267,21 @@ def render_document(
     content_id = str(document.get("content_id", ""))
     primary_document_id = str(document.get("document_id", ""))
     primary_path = str(document.get("source_path", ""))
+    document_ids = {item for item in source_ids if item}
+    relevant_relations = document_relation_rows(
+        document_ids=document_ids,
+        relations=relations,
+    )
+    confirmed_relations = [
+        relation
+        for relation in relevant_relations
+        if source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
+    ]
+    conflict_relations = [
+        relation
+        for relation in relevant_relations
+        if source_fact_reconciliation_status(relation) == HUMAN_DECISION_STATUS
+    ]
 
     lines = [
         "---",
@@ -276,7 +313,10 @@ def render_document(
         f"| Canonical document code | `{document_code}` |",
         f"| Canonical version | `{CANONICAL_VERSION}` |",
         f"| Original title | {table_text(title)} |",
-        f"| Owner E2E worklist | `{e2e_code}` - {table_text(e2e_title)} |",
+        "| Owner E2E worklist | {} - {} |".format(
+            markdown_link(e2e_code, f"../e2e/{e2e_code}.md"),
+            table_text(e2e_title),
+        ),
         f"| Primary original document | `{primary_document_id}` |",
         f"| Original content ID | `{content_id}` |",
         f"| Original source path | `{table_text(primary_path)}` |",
@@ -315,6 +355,89 @@ def render_document(
         lines.append(
             f"| {mapping['label']} | `{mapping['status']}` | {matched or '-'} |"
         )
+    if confirmed_relations:
+        lines.extend(
+            [
+                "",
+                "## Verified Document Relationships",
+                "",
+                "These navigation links record existing source-explicit relationships only. They do not add, remove, or rewrite requirements in either PRD.",
+                "",
+                "| Direction | Related PRD | Related E2E | Type | Source-backed context | Evidence | Status |",
+                "|---|---|---|---|---|---|---|",
+            ]
+        )
+        for relation in confirmed_relations:
+            source_id = str(relation.get("source_document_id", ""))
+            target_id = str(relation.get("target_document_id", ""))
+            outgoing = source_id in document_ids
+            if source_id in document_ids and target_id in document_ids:
+                direction = "SELF"
+                related_id = target_id
+                related_e2e = str(relation.get("target_domain_code", ""))
+            elif outgoing:
+                direction = "OUTGOING"
+                related_id = target_id
+                related_e2e = str(relation.get("target_domain_code", ""))
+            else:
+                direction = "INCOMING"
+                related_id = source_id
+                related_e2e = str(relation.get("source_domain_code", ""))
+            related_code = code_by_document_id.get(related_id, "")
+            related_prd_link = (
+                markdown_link(related_code, f"{related_code}.md")
+                if related_code
+                else "-"
+            )
+            related_e2e_link = (
+                markdown_link(related_e2e, f"../e2e/{related_e2e}.md")
+                if related_e2e
+                else "-"
+            )
+            lines.append(
+                "| `{}` | {} | {} | `{}` | {} | {} | `{}` |".format(
+                    direction,
+                    related_prd_link,
+                    related_e2e_link,
+                    table_text(str(relation.get("relationship_type", ""))),
+                    relation_context(relation),
+                    table_text(str(relation.get("evidence_reference", "")) or "-"),
+                    AUTO_SOURCE_FACT_STATUS,
+                )
+            )
+    if conflict_relations:
+        lines.extend(
+            [
+                "",
+                "## Open Relationship Conflicts",
+                "",
+                "These source-explicit relationships remain outside the active graph until a human resolves the conflicting business meaning.",
+                "",
+                "| Related PRD | Related E2E | Type | Issue | Evidence | Status |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
+        for relation in conflict_relations:
+            source_id = str(relation.get("source_document_id", ""))
+            target_id = str(relation.get("target_document_id", ""))
+            outgoing = source_id in document_ids
+            related_id = target_id if outgoing else source_id
+            related_e2e = str(
+                relation.get("target_domain_code" if outgoing else "source_domain_code", "")
+            )
+            issue = str(relation.get("notes", "")).strip() or relation_context(
+                relation
+            )
+            lines.append(
+                "| `{}` | `{}` | `{}` | {} | {} | `{}` |".format(
+                    table_text(code_by_document_id.get(related_id, "-")),
+                    table_text(related_e2e or "-"),
+                    table_text(str(relation.get("relationship_type", ""))),
+                    table_text(issue),
+                    table_text(str(relation.get("evidence_reference", "")) or "-"),
+                    HUMAN_DECISION_STATUS,
+                )
+            )
     lines.extend(
         [
             "",
@@ -359,6 +482,11 @@ def render_e2e_context(
         for relation in relevant_relations
         if source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
     ]
+    confirmed_cross_relations = [
+        relation
+        for relation in cross_relations
+        if source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
+    ]
     human_decision_relations = [
         relation
         for relation in relevant_relations
@@ -392,6 +520,7 @@ def render_e2e_context(
         f"| Within-domain relations | {len(within_relations)} |",
         f"| Cross-domain relations | {len(cross_relations)} |",
         f"| Automatically reconciled source facts | {len(auto_reconciled_relations)} |",
+        f"| Verified cross-domain graph relations | {len(confirmed_cross_relations)} |",
         f"| Source-explicit issues requiring human decision | {len(human_decision_relations)} |",
         "| Semantic changes from source | `NONE` |",
         "",
@@ -425,6 +554,48 @@ def render_e2e_context(
                 table_text(str(document.get("review_status", "")) or "-"),
             )
         )
+
+    if confirmed_cross_relations:
+        lines.extend(
+            [
+                "",
+                "## Verified Cross-Domain Flow",
+                "",
+                "Only source-explicit, non-conflicting relations appear as active Obsidian links. Mechanical candidates remain in the review table below and do not become business-flow facts.",
+                "",
+                "| Direction | Related E2E | From PRD | To PRD | Type | Source-backed context | Evidence | Status |",
+                "|---|---|---|---|---|---|---|---|",
+            ]
+        )
+        for relation in confirmed_cross_relations:
+            outgoing = str(relation.get("source_domain_code", "")) == e2e_code
+            related_e2e = str(
+                relation.get("target_domain_code" if outgoing else "source_domain_code", "")
+            )
+            source_code = code_by_document_id.get(
+                str(relation.get("source_document_id", "")), ""
+            )
+            target_code = code_by_document_id.get(
+                str(relation.get("target_document_id", "")), ""
+            )
+            lines.append(
+                "| `{}` | {} | {} | {} | `{}` | {} | {} | `{}` |".format(
+                    "OUTGOING" if outgoing else "INCOMING",
+                    markdown_link(related_e2e, f"{related_e2e}.md")
+                    if related_e2e
+                    else "-",
+                    markdown_link(source_code, f"../prds/{source_code}.md")
+                    if source_code
+                    else "-",
+                    markdown_link(target_code, f"../prds/{target_code}.md")
+                    if target_code
+                    else "-",
+                    table_text(str(relation.get("relationship_type", ""))),
+                    relation_context(relation),
+                    table_text(str(relation.get("evidence_reference", "")) or "-"),
+                    AUTO_SOURCE_FACT_STATUS,
+                )
+            )
 
     lines.extend(
         [
@@ -592,18 +763,19 @@ def render_index(
         [
             "## E2E Contexts",
             "",
-            "| E2E | Domain | Owner PRDs | Relations | Auto source facts | Human decisions |",
-            "|---|---|---:|---:|---:|---:|",
+            "| E2E | Domain | Owner PRDs | Relations | Verified cross-domain graph | Auto source facts | Human decisions |",
+            "|---|---|---:|---:|---:|---:|---:|",
         ]
     )
     for context in e2e_contexts:
         lines.append(
-            "| [{}](<{}>) | {} | {} | {} | {} | {} |".format(
+            "| [{}](<{}>) | {} | {} | {} | {} | {} | {} |".format(
                 context["e2e_code"],
                 Path(context["path"]).relative_to(CANONICAL_ROOT).as_posix(),
                 table_text(context["title"]),
                 context["document_count"],
                 context["relation_count"],
+                context.get("verified_cross_domain_relation_count", 0),
                 context.get("automatically_reconciled_source_fact_count", 0),
                 context.get("human_decision_required_count", 0),
             )
@@ -629,6 +801,7 @@ def render_readme(
         "- Version `v0.0.0` is a bootstrap baseline ready for reconciliation consumption; it is not an approved Git release or tag.",
         "- Reconciliation may enrich later canonical versions only from source facts or explicit user-confirmed decisions.",
         "- Source-explicit, non-conflicting E2E relations are recorded as `RESOLVED_BY_SOURCE_FACT`; source conflicts remain `HUMAN_DECISION_REQUIRED`.",
+        "- Direct PRD-to-PRD and E2E-to-E2E Obsidian links are generated only for source-explicit, non-conflicting relations; mechanical candidates never become active graph facts.",
         "- `prds/` stores the complete document requirements; `e2e/` stores worklist and relationship context without expanding PRD scope.",
         "",
         "## Coverage",
@@ -683,10 +856,23 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
         str(item.get("document_id", "")): item for item in catalog.get("documents", [])
     }
     registry = assign_codes(inventory, load_registry(repo))
+    inventory_rows = inventory_documents(inventory)
+    relations = [
+        dict(relation)
+        for relation in inventory.get("relations", [])
+        if isinstance(relation, dict)
+    ]
+    code_by_document_id: dict[str, str] = {}
+    for _, document in inventory_rows:
+        document_code = registry[str(document.get("content_id", ""))]["document_code"]
+        for representation in document.get("source_representations", []):
+            document_id = str(representation.get("document_id", ""))
+            if document_id:
+                code_by_document_id[document_id] = document_code
     manifest_documents: list[dict[str, Any]] = []
     expected_prd_outputs: set[Path] = set()
 
-    for domain, document in inventory_documents(inventory):
+    for domain, document in inventory_rows:
         e2e_code = str(domain.get("e2e_code", ""))
         e2e_title = str(domain.get("title", ""))
         content_id = str(document.get("content_id", ""))
@@ -735,12 +921,28 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
             document=document,
             source_sha256=source_sha256,
             mappings=mappings,
+            relations=relations,
+            code_by_document_id=code_by_document_id,
         )
         output_relative = CANONICAL_ROOT / "prds" / f"{document_code}.md"
         output = repo / output_relative
         generated = header + raw
         write_if_changed(output, generated)
         expected_prd_outputs.add(output.resolve())
+        relevant_relations = document_relation_rows(
+            document_ids=representation_ids,
+            relations=relations,
+        )
+        confirmed_document_relations = [
+            relation
+            for relation in relevant_relations
+            if source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
+        ]
+        conflict_document_relations = [
+            relation
+            for relation in relevant_relations
+            if source_fact_reconciliation_status(relation) == HUMAN_DECISION_STATUS
+        ]
         manifest_documents.append(
             {
                 "document_code": document_code,
@@ -757,6 +959,19 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
                 "source_sha256": source_sha256,
                 "source_representations": representations,
                 "standard_section_map": mappings,
+                "verified_relation_ids": [
+                    str(relation.get("relation_id", ""))
+                    for relation in confirmed_document_relations
+                ],
+                "verified_relation_count": len(confirmed_document_relations),
+                "verified_cross_domain_relation_count": sum(
+                    relation.get("source_domain_code")
+                    != relation.get("target_domain_code")
+                    for relation in confirmed_document_relations
+                ),
+                "human_decision_required_relation_count": len(
+                    conflict_document_relations
+                ),
                 "path": output_relative.as_posix(),
                 "payload_offset": len(header),
                 "payload_length": len(raw),
@@ -786,18 +1001,7 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
             registry.items(), key=lambda item: item[1]["document_code"]
         )
     ]
-    code_by_document_id = {
-        str(representation.get("document_id", "")): document["document_code"]
-        for document in manifest_documents
-        for representation in document.get("source_representations", [])
-        if representation.get("document_id")
-    }
     inventory_sha256 = sha256_bytes(inventory_file.read_bytes())
-    relations = [
-        dict(relation)
-        for relation in inventory.get("relations", [])
-        if isinstance(relation, dict)
-    ]
     automatically_reconciled_relations = [
         relation
         for relation in relations
@@ -867,6 +1071,11 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
                 "automatically_reconciled_source_fact_count": len(
                     domain_auto_reconciled
                 ),
+                "verified_cross_domain_relation_count": sum(
+                    relation.get("source_domain_code")
+                    != relation.get("target_domain_code")
+                    for relation in domain_auto_reconciled
+                ),
                 "human_decision_required_count": len(domain_human_decisions),
                 "generated_sha256": sha256_bytes(generated),
                 "semantic_changes": "NONE",
@@ -895,7 +1104,7 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
         "baseline_status": "BOOTSTRAPPED",
         "release_status": "UNRELEASED",
         "consumption_status": "READY_FOR_RECONCILIATION",
-        "generator_version": 1,
+        "generator_version": 2,
         "code_pattern": "PRD-<DOMAIN>-<NNN>",
         "source_inventory_path": INVENTORY_PATH.as_posix(),
         "source_inventory_sha256": sha256_bytes(inventory_file.read_bytes()),
@@ -911,6 +1120,24 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
             automatically_reconciled_relations
         ),
         "human_decision_required_count": len(human_decision_relations),
+        "relationship_graph": {
+            "status": "MATERIALIZED",
+            "policy": "SOURCE_EXPLICIT_NON_CONFLICTING_ONLY",
+            "verified_relation_count": len(automatically_reconciled_relations),
+            "verified_cross_domain_relation_count": sum(
+                relation.get("source_domain_code")
+                != relation.get("target_domain_code")
+                for relation in automatically_reconciled_relations
+            ),
+            "human_decision_required_relation_count": len(
+                human_decision_relations
+            ),
+            "mechanical_candidate_relation_count": sum(
+                relation.get("verification_status") == "REVIEW_REQUIRED"
+                for relation in relations
+            ),
+            "requirement_change": "NONE",
+        },
         "automatic_candidate_reconciliation": {
             "status": "COMPLETED",
             "register_path": AUTOMATIC_REGISTER_PATH.as_posix(),
@@ -946,6 +1173,8 @@ def validate(repo: Path) -> dict[str, Any]:
         errors.append("Invalid canonical manifest type")
     if manifest.get("canonical_version") != CANONICAL_VERSION:
         errors.append("Canonical manifest is not bootstrap version v0.0.0")
+    if manifest.get("generator_version") != 2:
+        errors.append("Canonical manifest was not produced by relationship graph generator v2")
     if manifest.get("source_inventory_sha256") != sha256_bytes(inventory_file.read_bytes()):
         errors.append("Canonical manifest was generated from a different E2E inventory")
 
@@ -962,12 +1191,36 @@ def validate(repo: Path) -> dict[str, Any]:
         source_fact_reconciliation_status(relation) == HUMAN_DECISION_STATUS
         for relation in relations
     )
+    expected_cross_auto_count = sum(
+        source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
+        and relation.get("source_domain_code") != relation.get("target_domain_code")
+        for relation in relations
+    )
+    expected_mechanical_count = sum(
+        relation.get("verification_status") == "REVIEW_REQUIRED"
+        for relation in relations
+    )
     if manifest.get("automatic_source_fact_reconciliation_status") != "COMPLETED":
         errors.append("Automatic source-fact reconciliation is not complete")
     if manifest.get("automatically_reconciled_source_fact_count") != expected_auto_count:
         errors.append("Automatic source-fact reconciliation count is inconsistent")
     if manifest.get("human_decision_required_count") != expected_human_count:
         errors.append("Human-decision relation count is inconsistent")
+    graph = manifest.get("relationship_graph", {})
+    if graph.get("status") != "MATERIALIZED":
+        errors.append("Canonical relationship graph is not materialized")
+    if graph.get("policy") != "SOURCE_EXPLICIT_NON_CONFLICTING_ONLY":
+        errors.append("Canonical relationship graph policy is invalid")
+    if graph.get("verified_relation_count") != expected_auto_count:
+        errors.append("Canonical verified relationship graph count is inconsistent")
+    if graph.get("verified_cross_domain_relation_count") != expected_cross_auto_count:
+        errors.append("Canonical cross-domain relationship graph count is inconsistent")
+    if graph.get("human_decision_required_relation_count") != expected_human_count:
+        errors.append("Canonical relationship conflict count is inconsistent")
+    if graph.get("mechanical_candidate_relation_count") != expected_mechanical_count:
+        errors.append("Canonical mechanical relationship candidate count is inconsistent")
+    if graph.get("requirement_change") != "NONE":
+        errors.append("Canonical relationship graph must not change requirements")
 
     automatic_summary = manifest.get("automatic_candidate_reconciliation", {})
     register_path = repo / AUTOMATIC_REGISTER_PATH
@@ -1092,6 +1345,42 @@ def validate(repo: Path) -> dict[str, Any]:
             if sha256_bytes(representation_path.read_bytes()) != expected_sha:
                 errors.append(f"Original representation checksum changed: {relative}")
 
+        document_ids = {
+            str(representation.get("document_id", ""))
+            for representation in item.get("source_representations", [])
+            if representation.get("document_id")
+        }
+        document_relations = document_relation_rows(
+            document_ids=document_ids,
+            relations=relations,
+        )
+        expected_document_auto = sum(
+            source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
+            for relation in document_relations
+        )
+        expected_document_cross = sum(
+            source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
+            and relation.get("source_domain_code")
+            != relation.get("target_domain_code")
+            for relation in document_relations
+        )
+        expected_document_human = sum(
+            source_fact_reconciliation_status(relation) == HUMAN_DECISION_STATUS
+            for relation in document_relations
+        )
+        if item.get("verified_relation_count") != expected_document_auto:
+            errors.append(
+                f"Verified relationship count is inconsistent for {item.get('document_code', content_id)}"
+            )
+        if item.get("verified_cross_domain_relation_count") != expected_document_cross:
+            errors.append(
+                f"Verified cross-domain relationship count is inconsistent for {item.get('document_code', content_id)}"
+            )
+        if item.get("human_decision_required_relation_count") != expected_document_human:
+            errors.append(
+                f"Human-decision relationship count is inconsistent for {item.get('document_code', content_id)}"
+            )
+
     prd_root = repo / CANONICAL_ROOT / "prds"
     actual_outputs = {path.resolve() for path in prd_root.glob("PRD-*.md")} if prd_root.is_dir() else set()
     if actual_outputs != expected_outputs:
@@ -1143,12 +1432,22 @@ def validate(repo: Path) -> dict[str, Any]:
             source_fact_reconciliation_status(relation) == HUMAN_DECISION_STATUS
             for relation in domain_relations
         )
+        expected_domain_cross_auto = sum(
+            source_fact_reconciliation_status(relation) == AUTO_SOURCE_FACT_STATUS
+            and relation.get("source_domain_code")
+            != relation.get("target_domain_code")
+            for relation in domain_relations
+        )
         if item.get("automatically_reconciled_source_fact_count") != expected_domain_auto:
             errors.append(
                 f"Automatic source-fact count is inconsistent for {e2e_code}"
             )
         if item.get("human_decision_required_count") != expected_domain_human:
             errors.append(f"Human-decision count is inconsistent for {e2e_code}")
+        if item.get("verified_cross_domain_relation_count") != expected_domain_cross_auto:
+            errors.append(
+                f"Verified cross-domain graph count is inconsistent for {e2e_code}"
+            )
     e2e_root = repo / CANONICAL_ROOT / "e2e"
     actual_e2e_outputs = (
         {path.resolve() for path in e2e_root.glob("E2E-*.md")}

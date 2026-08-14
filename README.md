@@ -61,6 +61,12 @@ tetap `HUMAN_DECISION_REQUIRED`; agent wajib meminta keputusan user dan tidak
 boleh memilih salah satu fakta sendiri. Penutupan otomatis hanya memperkaya
 jejak konteks E2E dan tidak menerbitkan release, commit, tag, atau push.
 
+Canonical generator menulis relasi yang sudah `RESOLVED_BY_SOURCE_FACT` sebagai
+link langsung PRD-ke-PRD dan E2E-ke-E2E agar graph Obsidian menampilkan alur
+lintas dokumen dan lintas domain. Relasi `MECHANICAL_CANDIDATE` tetap berada di
+tabel review dan tidak dibuat sebagai garis aktif, sehingga kemiripan nama atau
+referensi mekanis tidak disalahartikan sebagai requirement maupun alur bisnis.
+
 Hasil scan penuh seluruh PRD tersimpan di
 `neurovi-prd/reconciliation/canonical/automatic-reconciliation.json` dan
 laporan manusianya di `automatic-reconciliation.md`. Register ini menutup

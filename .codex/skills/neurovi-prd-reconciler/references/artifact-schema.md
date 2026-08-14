@@ -30,6 +30,15 @@ The manifest also records
 automatic and human-decision counts. Conflict relations must never contribute
 to the automatic count.
 
+`relationship_graph` records the generated navigation layer. Direct
+PRD-to-PRD and E2E-to-E2E links may be materialized only for relationships that
+are `SOURCE_EXPLICIT`, use `SOURCE_FACT` or `CROSS_SOURCE_FACT`, have
+`NO_CONFLICT_IDENTIFIED`, and therefore resolve as `RESOLVED_BY_SOURCE_FACT`, or
+for a later relation backed by an explicit `USER_CONFIRMED` decision. Mechanical
+candidates and source conflicts remain visible review metadata but must not be
+rendered as active graph edges. Graph materialization always records
+`requirement_change=NONE`.
+
 `reconciliation/canonical/automatic-reconciliation.json` records the full
 deterministic review of main-flow and business-case scanner candidates across
 all eligible PRDs. Its Markdown companion is

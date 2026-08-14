@@ -92,6 +92,67 @@ class CanonicalBootstrapTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def add_rawat_inap_document(self) -> None:
+        source_relative = "PRD/PRD Generator (.md)/Pelayanan (.md)/rawat-inap.md"
+        source = self.repo / "source/original" / source_relative
+        raw = b"# Rawat Inap\n\n## Main Flow\n\nReceives the explicit handoff.\n"
+        source.write_bytes(raw)
+        sha = hashlib.sha256(raw).hexdigest()
+
+        inventory_path = self.repo / bootstrap.INVENTORY_PATH
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        inventory["eligible_file_count"] = 2
+        inventory["unique_prd_count"] = 2
+        inventory["domain_count"] = 2
+        inventory["relations"][0].update(
+            {
+                "target_document_id": "DOC-002",
+                "target_domain_code": "E2E-RI",
+            }
+        )
+        inventory["domains"].append(
+            {
+                "e2e_code": "E2E-RI",
+                "title": "Rawat Inap",
+                "documents": [
+                    {
+                        "worklist_order": 1,
+                        "worklist_stage": "ENTRY",
+                        "content_id": "CONTENT-002",
+                        "document_id": "DOC-002",
+                        "title": "Rawat Inap",
+                        "source_path": source_relative,
+                        "source_representations": [
+                            {
+                                "document_id": "DOC-002",
+                                "source_path": source_relative,
+                                "title": "Rawat Inap",
+                                "sha256": sha,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+        catalog_path = self.repo / bootstrap.CATALOG_PATH
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["documents"].append(
+            {
+                "document_id": "DOC-002",
+                "content_id": "CONTENT-002",
+                "source_path": source_relative,
+                "title": "Rawat Inap",
+                "sha256": sha,
+                "headings": [
+                    {"level": 1, "text": "Rawat Inap", "line": 1},
+                    {"level": 2, "text": "Main Flow", "line": 3},
+                ],
+            }
+        )
+        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+
     def test_build_is_lossless_and_deterministic(self) -> None:
         self.assertTrue(bootstrap.build(self.repo)["valid"])
         manifest_path = self.repo / bootstrap.MANIFEST_PATH
@@ -102,6 +163,7 @@ class CanonicalBootstrapTests(unittest.TestCase):
 
         self.assertEqual(document["document_code"], "PRD-RJ-001")
         self.assertEqual(manifest["canonical_version"], "v0.0.0")
+        self.assertEqual(manifest["generator_version"], 2)
         self.assertEqual(manifest["artifact_type"], "CANONICAL_BASELINE_MANIFEST")
         self.assertEqual(document["path"], "reconciliation/canonical/prds/PRD-RJ-001.md")
         self.assertEqual(document["payload_length"], len(self.raw))
@@ -131,6 +193,77 @@ class CanonicalBootstrapTests(unittest.TestCase):
         self.assertTrue(bootstrap.build(self.repo)["valid"])
         self.assertEqual(manifest_path.read_bytes(), manifest_bytes)
         self.assertEqual(generated_path.read_bytes(), generated)
+
+    def test_verified_cross_domain_relation_materializes_direct_graph_links(self) -> None:
+        self.add_rawat_inap_document()
+
+        self.assertTrue(bootstrap.build(self.repo)["valid"])
+        manifest = json.loads(
+            (self.repo / bootstrap.MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+        documents = {
+            item["document_code"]: item for item in manifest["documents"]
+        }
+        rawat_jalan = (
+            self.repo / documents["PRD-RJ-001"]["path"]
+        ).read_text(encoding="utf-8")
+        rawat_inap = (
+            self.repo / documents["PRD-RI-001"]["path"]
+        ).read_text(encoding="utf-8")
+        e2e_rawat_jalan = (
+            self.repo / "reconciliation/canonical/e2e/E2E-RJ.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("## Verified Document Relationships", rawat_jalan)
+        self.assertIn("[PRD-RI-001](<PRD-RI-001.md>)", rawat_jalan)
+        self.assertIn("[E2E-RI](<../e2e/E2E-RI.md>)", rawat_jalan)
+        self.assertIn("[PRD-RJ-001](<PRD-RJ-001.md>)", rawat_inap)
+        self.assertIn("## Verified Cross-Domain Flow", e2e_rawat_jalan)
+        self.assertIn("[E2E-RI](<E2E-RI.md>)", e2e_rawat_jalan)
+        self.assertEqual(
+            manifest["relationship_graph"]["verified_cross_domain_relation_count"],
+            1,
+        )
+        self.assertEqual(
+            documents["PRD-RJ-001"]["verified_cross_domain_relation_count"],
+            1,
+        )
+        self.assertEqual(manifest["semantic_changes"], "NONE")
+
+    def test_mechanical_relation_does_not_materialize_as_graph_fact(self) -> None:
+        self.add_rawat_inap_document()
+        inventory_path = self.repo / bootstrap.INVENTORY_PATH
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        inventory["relations"][0].update(
+            {
+                "relationship_type": "REFERENCES",
+                "evidence_class": "MECHANICAL_CANDIDATE",
+                "verification_status": "REVIEW_REQUIRED",
+            }
+        )
+        inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+        self.assertTrue(bootstrap.build(self.repo)["valid"])
+        manifest = json.loads(
+            (self.repo / bootstrap.MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+        rawat_jalan = (
+            self.repo / "reconciliation/canonical/prds/PRD-RJ-001.md"
+        ).read_text(encoding="utf-8")
+        e2e_rawat_jalan = (
+            self.repo / "reconciliation/canonical/e2e/E2E-RJ.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("## Verified Document Relationships", rawat_jalan)
+        self.assertNotIn("[PRD-RI-001](<PRD-RI-001.md>)", rawat_jalan)
+        self.assertNotIn("## Verified Cross-Domain Flow", e2e_rawat_jalan)
+        self.assertEqual(
+            manifest["relationship_graph"]["verified_relation_count"], 0
+        )
+        self.assertEqual(
+            manifest["relationship_graph"]["mechanical_candidate_relation_count"],
+            1,
+        )
 
     def test_validate_detects_modified_payload(self) -> None:
         bootstrap.build(self.repo)
