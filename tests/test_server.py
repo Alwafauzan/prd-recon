@@ -1652,6 +1652,56 @@ class ReconciliationAgentTests(unittest.TestCase):
             self.assertEqual(captured.exception.status_code, 409)
             self.assertIn("pengguna lain", str(captured.exception))
 
+    def test_existing_session_rejects_updates_from_another_user(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            workspace = repo / "reconciliation/workspaces/E2E-RJ"
+            workspace.mkdir(parents=True)
+            (workspace / "session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "REC-E2E-RJ-001",
+                        "e2e_code": "E2E-RJ",
+                        "e2e_title": "Rawat Jalan",
+                        "status": "AWAITING_USER",
+                        "started_by": {"discord_user_id": "999"},
+                        "event_count": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                repo_root=repo,
+                tools_root=TOOLS_REPO,
+                discord_reconcile_role_ids=frozenset({456}),
+                llm_provider="9router",
+                llm_model="model-name",
+            )
+            agent = ReconciliationAgent.__new__(ReconciliationAgent)
+            agent.settings = settings
+            agent.store = SessionStore(repo, TOOLS_REPO)
+            agent.model_profile = {
+                "provider": "9router",
+                "model": "model-name",
+                "reasoning_effort": "high",
+            }
+
+            with self.assertRaises(ReconciliationAgentError) as captured:
+                agent.invoke(
+                    {
+                        "capability": "reconcile.status",
+                        "parameters": {"session_id": "REC-E2E-RJ-001"},
+                        "actor": {
+                            "discord_user_id": "123",
+                            "discord_role_ids": ["456"],
+                        },
+                    }
+                )
+
+            self.assertEqual(captured.exception.status_code, 409)
+            self.assertIn("pengguna lain", str(captured.exception))
+
     def test_failed_model_start_does_not_leave_an_active_session_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

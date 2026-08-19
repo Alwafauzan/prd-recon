@@ -55,6 +55,8 @@ services:
       GIT_DIR: /.git/modules/neurovi-prd
       GIT_WORK_TREE: /repository
       SSH_AUTH_SOCK: /run/neurovi/ssh-agent
+    ports:
+      - "127.0.0.1:${NEUROVI_AGENT_HOST_PORT:-8080}:8080"
     volumes:
       - ./neurovi-prd:/repository
       - ./.git/modules/neurovi-prd:/.git/modules/neurovi-prd

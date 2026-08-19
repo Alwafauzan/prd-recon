@@ -30,6 +30,52 @@ python3 scripts/build_structure.py validate \
   --target neurovi-prd
 ```
 
+## PRD MCP
+
+Repository ini menyediakan remote MCP terpisah untuk memberi agent konteks task
+dari PRD original, ownership E2E, coverage section, dan bukti relasi. Seluruh
+pembacaan konten memverifikasi checksum source original. Secara default server
+read-only; update workspace rekonsiliasi dapat diaktifkan secara eksplisit melalui
+reconciliation-agent tanpa memberi MCP akses shell, Git, atau arbitrary path.
+
+Deployment MCP sengaja memakai `compose.mcp.yaml`, container
+`neurovi-prd-mcp`, default port `8767`, dan host networking dengan bind IPv4
+privat/loopback yang eksplisit. Ia tidak membuat Docker bridge/subnet baru dan
+tidak mengubah network stack `compose.yaml` existing.
+
+```bash
+./setup-prd-mcp.sh --host-ip <private-ip-server>
+```
+
+Contoh server ini: `./setup-prd-mcp.sh --host-ip 172.31.254.107`.
+Gunakan `127.0.0.1` hanya untuk development yang memang tidak menerima client
+remote.
+
+Tool yang tersedia:
+
+- `prd_status`
+- `search_prds`
+- `get_prd`
+- `get_e2e_context`
+- `get_task_context`
+- `trace_prd_relations`
+
+Bila gateway rekonsiliasi dikonfigurasi, MCP juga menyediakan:
+
+- `start_prd_reconciliation`
+- `get_prd_reconciliation_status`
+- `answer_prd_reconciliation`
+- `control_prd_reconciliation`
+- `add_prd_reconciliation_reference`
+- `confirm_prd_reconciliation_decision`
+- `stop_prd_reconciliation`
+
+Update tools hanya menulis workspace audit dan register keputusan. Original PRD,
+publish baseline, commit, tag, dan push tetap tidak tersedia melalui MCP.
+
+Petunjuk deployment, firewall, dan konfigurasi client tersedia di
+`docs/prd-mcp-server.md`.
+
 ## Lossless Canonical Bootstrap v0
 
 Bootstrap every eligible original Markdown PRD into one generated format and a
