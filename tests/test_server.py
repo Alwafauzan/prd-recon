@@ -211,6 +211,11 @@ class DomainWorklistInventoryTests(unittest.TestCase):
                 "ENTRY_POINT_TO",
             ),
             (
+                "PRD — Pendaftaran Rawat Jalan",
+                "PRD — Order Hemodialisa",
+                "ENTRY_POINT_TO",
+            ),
+            (
                 "Dashboard Pelayanan IGD",
                 "PRD — Order Pemeriksaan Laboratorium",
                 "ENTRY_POINT_TO",
@@ -237,6 +242,37 @@ class DomainWorklistInventoryTests(unittest.TestCase):
             ),
         }
         self.assertTrue(expected.issubset(active))
+
+    def test_hemodialysis_entry_points_use_current_source_context(self) -> None:
+        relations = [
+            row
+            for row in self.inventory["relations"]
+            if row["target_title"] == "PRD — Order Hemodialisa"
+            and row["relationship_type"] == "ENTRY_POINT_TO"
+            and row["evidence_class"] == "CROSS_SOURCE_FACT"
+        ]
+        self.assertEqual(
+            {row["source_title"] for row in relations},
+            {
+                "Dashboard Pelayanan IGD",
+                "PRD — Dashboard Pelayanan Rawat Inap Neurovi v2",
+                "PRD — Pendaftaran Rawat Jalan",
+            },
+        )
+        self.assertTrue(
+            all(
+                row["output_context"]
+                == "Order HD yang berhasil dibuat menyebabkan pasien masuk/tersedia pada Dashboard Pelayanan Hemodialisa."
+                for row in relations
+            )
+        )
+        self.assertTrue(
+            all("Menunggu Konfirmasi" not in row["output_context"] for row in relations)
+        )
+        self.assertEqual(
+            {row["evidence_reference"].rsplit(":", 1)[-1] for row in relations},
+            {"56", "57", "58"},
+        )
 
     def test_ambiguous_billing_and_registration_targets_remain_review_only(self) -> None:
         ambiguous_sources = {
