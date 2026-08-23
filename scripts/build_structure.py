@@ -1250,9 +1250,20 @@ Repositori ini mempertahankan seluruh dokumen sumber tanpa perubahan dan menyedi
 
 Tidak ada isi dokumen yang diperbaiki, diringkas secara menggantikan sumber, atau diberi status implementasi baru. Lihat [aturan preservasi](docs/context-preservation.md) dan [aturan korelasi](docs/correlation-rules.md).
 
-Generator, scanner, skill, dan server berada di repository terpisah
-`neurovi-doc-reconciliator`. Repository ini dikonsumsi sebagai submodule
-`neurovi-prd/` oleh tools tersebut.
+## Tooling
+
+Generator, validator, scanner, skill rekonsiliasi, command service, dan adapter
+Discord berada di repository terpisah `neurovi-doc-reconciliator`. Repository
+ini dipasang sebagai submodule `neurovi-prd/` di dalam tools repository tersebut.
+
+```bash
+python3 ../scripts/build_structure.py validate \\
+  --source source/original \\
+  --target .
+```
+
+Versi global dokumen, release manifest, commit, dan annotated tag dibuat pada
+repository ini. Versi aplikasi tools dikelola secara terpisah.
 """
     text_write(target / "README.md", readme)
     text_write(
@@ -1267,8 +1278,10 @@ Generator, scanner, skill, dan server berada di repository terpisah
 
 ## Repository Skills
 
-- Skills live in the parent `neurovi-doc-reconciliator/.codex/skills/` repository.
-- Never copy or generate tool implementation into this document repository.
+- Skills and executable tooling live in the parent `neurovi-doc-reconciliator` repository.
+- When checked out as its submodule, read skills from `../.codex/skills/`.
+- Never copy application or skill implementation into this document repository.
+- Keep document baselines, reconciliation artifacts, release manifests, and global document tags in this repository.
 """,
     )
     text_write(

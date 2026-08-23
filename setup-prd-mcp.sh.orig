@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$ROOT/compose.mcp.yaml"
+if ((EUID == 0)); then
+  RUNTIME_ROOT=/etc/neurovi-prd-mcp
+else
+  RUNTIME_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/neurovi-prd-mcp"
+fi
+RUNTIME_ENV="$RUNTIME_ROOT/server.env"
+REPOSITORY_ROOT="$ROOT/neurovi-prd"
+HOST_IP=
+HOST_PORT=8767
+TOKEN=
+MAX_RESPONSE_CHARS=64000
+
+usage() {
+  printf '%s\n' \
+    "Usage: ./setup-prd-mcp.sh --host-ip IP [options]" \
+    "" \
+    "Options:" \
+    "  --host-ip IP          Private IPv4 or loopback bind (required)" \
+    "  --host-port PORT      Host port (default: 8767)" \
+    "  --repository PATH     Neurovi PRD checkout (default: ./neurovi-prd)" \
+    "  --token TOKEN         Reuse a 32+ character bearer token" \
+    "  --max-response N      Response character limit (16000-256000)"
+}
+
+existing_value() {
+  local key="$1"
+  if [[ -f "$RUNTIME_ENV" ]]; then
+    sed -n "s/^${key}=//p" "$RUNTIME_ENV" | tail -n 1
+  fi
+}
+
+while (($#)); do
+  case "$1" in
+    --host-ip)
+      HOST_IP="${2:-}"
+      shift 2
+      ;;
+    --host-port)
+      HOST_PORT="${2:-}"
+      shift 2
+      ;;
+    --repository)
+      REPOSITORY_ROOT="${2:-}"
+      shift 2
+      ;;
+    --token)
+      TOKEN="${2:-}"
+      shift 2
+      ;;
+    --max-response)
+      MAX_RESPONSE_CHARS="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'Unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "$HOST_IP" ]]; then
+  printf '%s\n' '--host-ip is required.' >&2
+  exit 2
+fi
+
+python3 - "$HOST_IP" "$HOST_PORT" "$MAX_RESPONSE_CHARS" "$REPOSITORY_ROOT" <<'PY'
+import ipaddress
+from pathlib import Path
+import sys
+
+address = ipaddress.ip_address(sys.argv[1])
+if address.version != 4 or address.is_unspecified or not (
+    address.is_private or address.is_loopback
+):
+    raise SystemExit("host IP must be a private IPv4 LAN or loopback address")
+
+port = int(sys.argv[2])
+if not 1 <= port <= 65535:
+    raise SystemExit("host port must be between 1 and 65535")
+
+response_limit = int(sys.argv[3])
+if not 16000 <= response_limit <= 256000:
+    raise SystemExit("response limit must be between 16000 and 256000")
+
+root = Path(sys.argv[4]).expanduser().resolve()
+required = (
+    root / "AGENTS.md",
+    root / "catalog/document-index.json",
+    root / "reconciliation/e2e-inventory/domain-worklist.json",
+    root / "reconciliation/canonical/manifest.json",
+)
+missing = [str(path) for path in required if not path.is_file()]
+if missing:
+    raise SystemExit("PRD checkout is incomplete: " + ", ".join(missing))
+PY
+
+REPOSITORY_ROOT="$(
+  python3 -c \
+    'from pathlib import Path; import sys; print(Path(sys.argv[1]).expanduser().resolve())' \
+    "$REPOSITORY_ROOT"
+)"
+
+if ! docker inspect neurovi-prd-mcp >/dev/null 2>&1; then
+  python3 - "$HOST_IP" "$HOST_PORT" <<'PY'
+import socket
+import sys
+
+with socket.socket() as listener:
+    try:
+        listener.bind((sys.argv[1], int(sys.argv[2])))
+    except OSError as error:
+        raise SystemExit(f"MCP bind address is already in use: {error}") from error
+PY
+fi
+
+if [[ -z "$TOKEN" ]]; then
+  TOKEN="$(existing_value NEUROVI_PRD_MCP_TOKEN)"
+fi
+if [[ -z "$TOKEN" ]]; then
+  TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+fi
+if ((${#TOKEN} < 32 || ${#TOKEN} > 256)) || [[ ! "$TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+  printf 'Bearer token must contain 32 to 256 URL-safe characters.\n' >&2
+  exit 2
+fi
+
+install -d -m 0700 "$RUNTIME_ROOT"
+install -m 0600 /dev/stdin "$RUNTIME_ENV" <<EOF
+NEUROVI_PRD_MCP_ENV_FILE=$RUNTIME_ENV
+NEUROVI_PRD_MCP_REPOSITORY_ROOT=$REPOSITORY_ROOT
+NEUROVI_PRD_MCP_REPOSITORY=/repository
+NEUROVI_PRD_MCP_BIND_HOST=$HOST_IP
+NEUROVI_PRD_MCP_PORT=$HOST_PORT
+NEUROVI_PRD_MCP_PUBLIC_URL=http://$HOST_IP:$HOST_PORT/mcp
+NEUROVI_PRD_MCP_TOKEN=$TOKEN
+NEUROVI_PRD_MCP_MAX_RESPONSE_CHARS=$MAX_RESPONSE_CHARS
+EOF
+
+docker compose \
+  --project-name neurovi-prd-mcp \
+  --env-file "$RUNTIME_ENV" \
+  -f "$COMPOSE_FILE" \
+  up -d --build
+
+container_health() {
+  docker inspect -f '{{.State.Health.Status}}' neurovi-prd-mcp \
+    2>/dev/null || true
+}
+
+for _ in $(seq 1 40); do
+  if [[ "$(container_health)" == "healthy" ]]; then
+    break
+  fi
+  sleep 2
+done
+if [[ "$(container_health)" != "healthy" ]]; then
+  docker logs --tail 100 neurovi-prd-mcp >&2 || true
+  printf 'PRD MCP container did not become healthy.\n' >&2
+  exit 1
+fi
+
+docker exec neurovi-prd-mcp neurovi-prd-mcp validate >/dev/null
+
+printf '%s\n' \
+  "INSTALLED endpoint=http://$HOST_IP:$HOST_PORT/mcp" \
+  "Token file: $RUNTIME_ENV" \
+  "Show token: sed -n 's/^NEUROVI_PRD_MCP_TOKEN=//p' $RUNTIME_ENV" \
+  "Logs: docker logs -f neurovi-prd-mcp"
