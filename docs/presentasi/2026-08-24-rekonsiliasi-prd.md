@@ -210,7 +210,7 @@ Dan section `Pertanyaan Terbuka` di PRD-RJ-005 kini berstatus jelas: **12 item �
 
 ---
 
-# Contoh: PRD-RJ-005 setelah rekonsiliasi
+# Contoh: PRD-RJ-005 (Pendaftaran MERGED) setelah rekonsiliasi
 
 12 konflik "Pertanyaan Terbuka" di dokumen MERGED kini punya jawaban resmi — dan sejak v0.0.2 **tertulis langsung di body dokumen**:
 
@@ -248,7 +248,7 @@ Yang tercatat di E2E-RJ:
 | `DEF-RJ-002` Trigger cetak D5 di dashboard B1 | **Terbuka** | Lokasi tombol cetak belum terdefinisi di spec B1 |
 | `DEF-RJ-BC-001` Status "Dilayani (tutup)" vs "Selesai" | **Terbuka** | Pakai 4 status resmi state machine dulu |
 | `DEF-RJ-BC-002` Scan KTP (perangkat TBD) | **Diterima apa adanya** | Resmi Phase 2 — di luar scope development sekarang |
-| 5 relasi → PRD-RJ-008 (v2.1 superseded) | **Review terpisah** | Referensi silang yang belum dirapikan, bukan blocker |
+| 5 relasi → PRD-RJ-008 (Dashboard v2.1, superseded) | **Review terpisah** | Referensi silang yang belum dirapikan, bukan blocker |
 
 **Tidak ada gap yang hilang diam-diam** — semua tetap terlihat di register & dashboard.
 
@@ -289,7 +289,7 @@ Usulan prioritas berikutnya:
 
 1. **E2E-RI (Rawat Inap)** — relasi lintas-domain dengan E2E-RJ sudah terverifikasi (SPRI, Transfer Internal, Discharge).
 2. **E2E-IGD** — volume kunjungan tinggi.
-3. Review terpisah: 5 relasi `REFERENCES` ke PRD-RJ-008 (`DEC-RJ-005`).
+3. Review terpisah: 5 relasi `REFERENCES` ke PRD-RJ-008, Dashboard v2.1 (`DEC-RJ-005`).
 
 Langkah administratif: **beres** — branch `preserve-prd-line-endings` + tag `v0.0.1` & `v0.0.2` semuanya sudah di remote.
 
@@ -388,14 +388,14 @@ Section `## Reconciliation Decisions Applied` yang di-append ke tiap PRD (commit
 
 | Dokumen | Keputusan diterapkan di body |
 |---|---|
-| **PRD-RJ-005** (21+1 edit) | Skrining → **Batuk saja** (6 lokasi) · NIK → **Identitas Fleksibel** · piutang **info-only** · hapus registrasi **Kepala Pendaftaran** · pencarian **≤ 2 detik** · ICD-10 **wajib** · SATUSEHAT = **B1** · offline **terima-dulu-rekonsiliasi-kemudian** · biometrik **wajib di loket** · **≤ 3 klik / ≤ 30 detik** · No. RM **6 digit** · `Pertanyaan Terbuka` ditulis ulang (12 final, 4 tetap terbuka) |
-| **PRD-RJ-010** (8) | Status Pulang **auto-set dashboard** · 5 "poli" = **unit penunjang** → form General · Anak **< 18 tahun** |
-| **PRD-RJ-012** (6) | Guard cetak **tetap dua asesmen** · akses cetak **status keluar terisi** · TTV kosong **"-"** |
-| **PRD-RJ-003** (7) | No. telepon **min 3 karakter** · typo sumber **diperbaiki** · `ip_address`+`user_agent` **masuk audit trail** |
-| **PRD-RJ-007** (2) | Banner **acuan utama** · §9.3 integrasi Status Pulang |
-| **PRD-RJ-008** (1) | Banner **SUPERSEDED — jangan dijadikan sumber implementasi** |
-| **PRD-RJ-011** (1) | Format salin Lab PK **"Nama Parameter: Nilai"** |
-| **PRD-RJ-001 / 002** (1+1) | Penanda `[GAP TERBUKA]` di lokasi defect — tidak ada requirement berubah |
+| **PRD-RJ-005** (Pendaftaran MERGED) — 21+1 edit | Skrining → **Batuk saja** (6 lokasi) · NIK → **Identitas Fleksibel** · piutang **info-only** · hapus registrasi **Kepala Pendaftaran** · pencarian **≤ 2 detik** · ICD-10 **wajib** · SATUSEHAT = **B1** · offline **terima-dulu-rekonsiliasi-kemudian** · biometrik **wajib di loket** · **≤ 3 klik / ≤ 30 detik** · No. RM **6 digit** · `Pertanyaan Terbuka` ditulis ulang (12 final, 4 tetap terbuka) |
+| **PRD-RJ-010** (Asesmen RJ) — 8 | Status Pulang **auto-set dashboard** · 5 "poli" = **unit penunjang** → form General · Anak **< 18 tahun** |
+| **PRD-RJ-012** (Ringkasan Pulang / D5) — 6 | Guard cetak **tetap dua asesmen** · akses cetak **status keluar terisi** · TTV kosong **"-"** |
+| **PRD-RJ-003** (General Consent) — 7 | No. telepon **min 3 karakter** · typo sumber **diperbaiki** · `ip_address`+`user_agent` **masuk audit trail** |
+| **PRD-RJ-007** (Dashboard v2.4) — 2 | Banner **acuan utama** · §9.3 integrasi Status Pulang |
+| **PRD-RJ-008** (Dashboard v2.1) — 1 | Banner **SUPERSEDED — jangan dijadikan sumber implementasi** |
+| **PRD-RJ-011** (Panel Riwayat Pasien) — 1 | Format salin Lab PK **"Nama Parameter: Nilai"** |
+| **PRD-RJ-001** (APM Check-in) / **PRD-RJ-002** (Display Antrean) — 1+1 | Penanda `[GAP TERBUKA]` di lokasi defect — tidak ada requirement berubah |
 
 **Tetap terbuka (sengaja tidak disentuh):** cakupan mock-vs-live · role ubah penjamin · batas B8/B1 · format No. SEP · pengecualian Skrining TB · ukuran kertas D5.
 

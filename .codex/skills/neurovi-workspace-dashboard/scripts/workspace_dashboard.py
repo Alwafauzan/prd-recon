@@ -79,10 +79,14 @@ def load_sources(repo):
     domains = {d.get("e2e_code"): d for d in worklist.get("domains", []) if d.get("e2e_code")}
 
     doc_id_to_code = {}
+    code_to_title = {}
     for doc in manifest.get("documents", []):
         code = doc.get("document_code")
         if not code:
             continue
+        title = re.sub(r"^\s*PRD\s*[—–-]\s*", "", str(doc.get("original_title") or "")).strip()
+        if title:
+            code_to_title[code] = title
         primary = doc.get("primary_source_document_id")
         if primary:
             doc_id_to_code[primary] = code
@@ -103,7 +107,7 @@ def load_sources(repo):
         entry["modes"].setdefault(mode, Counter())[status] += 1
 
     sessions = discover_sessions(repo / "reconciliation/workspaces")
-    return domains, doc_id_to_code, scanner_by_e2e, sessions
+    return domains, doc_id_to_code, code_to_title, scanner_by_e2e, sessions
 
 
 def discover_sessions(workspaces_root):
@@ -219,7 +223,13 @@ def decision_type_cell(dtype):
     return badge(css, label)
 
 
-def render_decisions(decisions, doc_id_to_code):
+def doc_label(code, code_to_title):
+    """'PRD-RJ-005 — Pendaftaran Rawat Jalan (MERGED)' or the bare code."""
+    title = (code_to_title or {}).get(code)
+    return f"{code} — {title}" if title else str(code)
+
+
+def render_decisions(decisions, doc_id_to_code, code_to_title):
     if not decisions:
         return '<div class="card"><h2>\U0001f9fe Register Keputusan</h2><div class="desc">Belum ada keputusan tercatat pada sesi ini.</div></div>'
     groups = {}
@@ -237,7 +247,7 @@ def render_decisions(decisions, doc_id_to_code):
     ]
     for code in sorted(groups):
         rows = groups[code]
-        parts.append(f'<div class="grp">\U0001f4c4 {esc(code)} ({len(rows)} keputusan)</div>')
+        parts.append(f'<div class="grp">\U0001f4c4 {esc(doc_label(code, code_to_title))} ({len(rows)} keputusan)</div>')
         parts.append(
             "<table><tr><th>ID</th><th>Pertanyaan</th><th>Keputusan</th><th>Tipe</th><th>Status</th></tr>"
         )
@@ -256,7 +266,7 @@ def render_decisions(decisions, doc_id_to_code):
     return "".join(parts)
 
 
-def render_defects(defects):
+def render_defects(defects, doc_id_to_code, code_to_title):
     if not defects:
         return '<div class="card"><h2>⚠️ Defect Register</h2><div class="desc">Tidak ada defect tercatat.</div></div>'
     parts = ['<div class="card"><h2>⚠️ Defect Register (%d)</h2><div class="desc">Defect terbuka tetap terlihat sampai ada disposisi resmi</div>' % len(defects)]
@@ -268,6 +278,12 @@ def render_defects(defects):
         meta = []
         if row.get("defect_type"):
             meta.append(row["defect_type"])
+        doc_ids = [p.strip() for p in (row.get("document_ids") or "").split(";") if p.strip()]
+        doc_labels = [
+            doc_label(doc_id_to_code.get(i, i), code_to_title) for i in doc_ids
+        ]
+        if doc_labels:
+            meta.append("dok: " + "; ".join(doc_labels))
         if row.get("resolution_decision_id"):
             meta.append(f"ditutup via {row['resolution_decision_id']}")
         if row.get("evidence_references"):
@@ -338,7 +354,7 @@ def render_timeline(session):
 # ---------------------------------------------------------------- page renderers
 
 
-def render_mode_block(e2e_code, session, doc_id_to_code, scanner_counts):
+def render_mode_block(e2e_code, session, doc_id_to_code, code_to_title, scanner_counts):
     meta = session["meta"]
     mode = meta.get("reconciliation_mode") or session["dir"].upper()
     mode_label = meta.get("reconciliation_mode_label") or ""
@@ -377,9 +393,9 @@ def render_mode_block(e2e_code, session, doc_id_to_code, scanner_counts):
         f"</div>",
         f'<div class="grid kpis">{kpis}</div>',
         render_version_bar(decisions),
-        render_decisions(decisions, doc_id_to_code),
+        render_decisions(decisions, doc_id_to_code, code_to_title),
         '<div class="grid two">'
-        + render_defects(defects)
+        + render_defects(defects, doc_id_to_code, code_to_title)
         + (render_scanner_funnel(mode_scanner, f"Register scanner untuk {esc(e2e_code)} mode {esc(mode)}") or '<div class="card"><h2>\U0001f50d Kandidat Scanner</h2><div class="desc">Tidak ada kandidat scanner tercatat untuk mode ini.</div></div>')
         + "</div>",
         '<div class="grid two">'
@@ -391,7 +407,7 @@ def render_mode_block(e2e_code, session, doc_id_to_code, scanner_counts):
     return "".join(sections)
 
 
-def render_e2e_page(e2e_code, domain, sessions, doc_id_to_code, scanner_counts, template, generated_at):
+def render_e2e_page(e2e_code, domain, sessions, doc_id_to_code, code_to_title, scanner_counts, template, generated_at):
     title = (domain or {}).get("title") or (sessions[0]["meta"].get("e2e_title") if sessions else "") or e2e_code
     purpose = (domain or {}).get("purpose") or ""
     group = (domain or {}).get("domain_group") or ""
@@ -409,7 +425,7 @@ def render_e2e_page(e2e_code, domain, sessions, doc_id_to_code, scanner_counts, 
         )
     else:
         body = head + "".join(
-            render_mode_block(e2e_code, s, doc_id_to_code, (scanner_counts or {}).get("modes", {}))
+            render_mode_block(e2e_code, s, doc_id_to_code, code_to_title, (scanner_counts or {}).get("modes", {}))
             for s in sessions
         )
 
@@ -516,7 +532,7 @@ def main():
         sys.exit(f"ERROR: template not found: {template_path}")
     template = template_path.read_text(encoding="utf-8")
 
-    domains, doc_id_to_code, scanner_by_e2e, sessions = load_sources(repo)
+    domains, doc_id_to_code, code_to_title, scanner_by_e2e, sessions = load_sources(repo)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -531,7 +547,7 @@ def main():
     for code in target_codes:
         page = render_e2e_page(
             code, domains.get(code), sessions.get(code, []),
-            doc_id_to_code, scanner_by_e2e.get(code), template, generated_at,
+            doc_id_to_code, code_to_title, scanner_by_e2e.get(code), template, generated_at,
         )
         path = out_dir / f"workspace-{code}.html"
         path.write_text(page, encoding="utf-8")
