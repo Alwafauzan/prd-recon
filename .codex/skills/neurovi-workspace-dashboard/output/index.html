@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workspace Dashboard — Rekonsiliasi PRD</title>
+<style>
+  :root{
+    --bg:#0f172a; --card:#1e293b; --card2:#253349; --line:#334155;
+    --txt:#e2e8f0; --mut:#94a3b8;
+    --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --blue:#3b82f6; --violet:#8b5cf6; --cyan:#06b6d4;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--txt);padding:28px;line-height:1.5}
+  .wrap{max-width:1180px;margin:0 auto}
+  header{margin-bottom:24px}
+  h1{font-size:24px;margin-bottom:6px}
+  h1 a{color:var(--txt);text-decoration:none}
+  .sub{color:var(--mut);font-size:14px}
+  .sub a{color:var(--cyan)}
+  .badge{display:inline-block;padding:3px 12px;border-radius:99px;font-size:12px;font-weight:600;letter-spacing:.4px}
+  .b-green{background:#14532d;color:#86efac}
+  .b-amber{background:#78350f;color:#fcd34d}
+  .b-blue{background:#1e3a8a;color:#93c5fd}
+  .b-violet{background:#4c1d95;color:#c4b5fd}
+  .b-cyan{background:#164e63;color:#67e8f9}
+  .b-red{background:#7f1d1d;color:#fca5a5}
+  .b-slate{background:#334155;color:#cbd5e1}
+  .grid{display:grid;gap:14px}
+  .kpis{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin:20px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .kpi .num{font-size:32px;font-weight:700;line-height:1.1}
+  .kpi .lbl{color:var(--mut);font-size:12.5px;margin-top:4px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
+  .card h2{font-size:16px;margin-bottom:4px}
+  .card .desc{color:var(--mut);font-size:13px;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--mut);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid #293548;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:var(--card2)}
+  .mono{font-family:Consolas,monospace;font-size:12px}
+  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
+  .bar-row .k{width:170px;color:var(--mut);text-align:right;flex-shrink:0}
+  .bar-track{flex:1;background:#0b1220;border-radius:6px;height:22px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:6px;display:flex;align-items:center;padding-left:8px;font-size:11.5px;font-weight:700;color:#0f172a;min-width:fit-content}
+  .v{color:var(--mut);width:40px;font-weight:600}
+  .funnel{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+  .fstep{flex:1;min-width:150px;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .fstep .n{font-size:26px;font-weight:700}
+  .fstep .t{font-size:12px;color:var(--mut);margin-top:3px}
+  .farrow{align-self:center;color:var(--mut);font-size:18px}
+  .two{grid-template-columns:1fr 1fr}
+  @media(max-width:860px){.two{grid-template-columns:1fr}}
+  .def{border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:10px;padding:14px;background:var(--card2);margin-bottom:10px}
+  .def.closed{border-left-color:var(--green)}
+  .def h3{font-size:14px;margin-bottom:4px}
+  .def p{font-size:13px;color:#cbd5e1}
+  .def .meta{font-size:12px;color:var(--mut);margin-top:6px}
+  .checklist{list-style:none}
+  .checklist li{font-size:13px;padding:4px 0;color:#cbd5e1}
+  .checklist li::before{content:'\2610';margin-right:8px;color:var(--mut)}
+  .checklist li.done{color:var(--mut)}
+  .checklist li.done::before{content:'\2611';color:var(--green)}
+  .tl{position:relative;padding-left:22px;border-left:2px solid var(--line);margin-left:6px}
+  .tl-item{position:relative;margin-bottom:14px;font-size:13px}
+  .tl-item::before{content:'';position:absolute;left:-29px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--blue);border:2px solid var(--bg)}
+  .tl-item.g::before{background:var(--green)}
+  .tl-item.v::before{background:var(--violet)}
+  .tl-item.a::before{background:var(--amber)}
+  .tl-item .ts{color:var(--mut);font-size:12px}
+  .grp{font-size:13px;font-weight:700;color:var(--cyan);margin:16px 0 6px}
+  .e2e-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;display:block;color:var(--txt);text-decoration:none}
+  .e2e-card:hover{border-color:var(--cyan)}
+  .e2e-card.plain{color:var(--mut)}
+  .e2e-card h3{font-size:15px;margin-bottom:2px}
+  .e2e-card .purpose{font-size:12.5px;color:var(--mut);margin-bottom:10px}
+  .e2e-card .stats{font-size:12.5px;color:#cbd5e1}
+  .e2e-card .stats b{color:var(--txt)}
+  .cards{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+  .mode-block{margin-bottom:26px}
+  .mode-head{border-bottom:2px solid var(--line);padding-bottom:8px;margin-bottom:14px}
+  footer{color:var(--mut);font-size:12px;text-align:center;margin-top:24px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>📊 Workspace Dashboard — Rekonsiliasi PRD</h1><div class="sub">Overview seluruh E2E dari <span class="mono">reconciliation/workspaces</span> · klik kartu untuk detail per E2E</div></header><div class="grid kpis"><div class="kpi"><div class="num" style="color:var(--blue)">23</div><div class="lbl">E2E dalam worklist</div></div><div class="kpi"><div class="num" style="color:var(--cyan)">1</div><div class="lbl">E2E dengan sesi tercatat</div></div><div class="kpi"><div class="num">2</div><div class="lbl">Sesi rekonsiliasi</div></div><div class="kpi"><div class="num" style="color:var(--green)">27</div><div class="lbl">Keputusan tercatat</div></div><div class="kpi"><div class="num" style="color:var(--amber)">3</div><div class="lbl">Defect OPEN</div></div><div class="kpi"><div class="num" style="color:var(--amber)">371/738</div><div class="lbl">Kandidat scanner OPEN / total</div></div></div><div class="grid cards"><div class="e2e-card plain"><h3>E2E-AMBULANCE — Ambulance</h3><div class="purpose">Order dan konfirmasi layanan ambulance.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>4</b>/5</div></div><div class="e2e-card plain"><h3>E2E-BILLING — Billing dan Kasir</h3><div class="purpose">Tagihan, kasir, deposito, dan penerimaan kas.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>18</b>/28</div></div><div class="e2e-card plain"><h3>E2E-CASEMIX — Casemix dan Klaim</h3><div class="purpose">Dokumen, pengajuan, penerimaan, dan rekonsiliasi klaim.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>6</b>/17</div></div><div class="e2e-card plain"><h3>E2E-EMR — Rekam Medis dan Dokumentasi Klinis</h3><div class="purpose">Dokumentasi klinis yang digunakan lintas unit pelayanan.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>9</b>/11</div></div><div class="e2e-card plain"><h3>E2E-FARMASI — Farmasi</h3><div class="purpose">Pelayanan obat, retur, rekonsiliasi, dan pengaturan farmasi.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>17</b>/33</div></div><div class="e2e-card plain"><h3>E2E-GIZI — Gizi</h3><div class="purpose">Order makanan, pemakaian barang, dan pelayanan gizi.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>4</b>/11</div></div><div class="e2e-card plain"><h3>E2E-HD — Hemodialisa</h3><div class="purpose">Order, penjadwalan, asesmen, dan monitoring hemodialisa.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>10</b>/24</div></div><div class="e2e-card plain"><h3>E2E-IBS — IBS dan Operasi</h3><div class="purpose">Permintaan, penjadwalan, pelaksanaan, dan laporan operasi.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>16</b>/46</div></div><div class="e2e-card plain"><h3>E2E-IGD — IGD</h3><div class="purpose">Pendaftaran, asesmen, observasi, dan pelayanan gawat darurat.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>26</b>/39</div></div><div class="e2e-card plain"><h3>E2E-INTEGRASI — Integrasi Eksternal</h3><div class="purpose">Pertukaran data dengan BPJS, SATUSEHAT, dan sistem eksternal.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>1</b>/4</div></div><div class="e2e-card plain"><h3>E2E-INVENTORY — Inventory dan Pengadaan</h3><div class="purpose">Perencanaan, pemesanan, penerimaan, stok, dan distribusi barang.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>28</b>/37</div></div><div class="e2e-card plain"><h3>E2E-JENAZAH — Pemulasaraan Jenazah</h3><div class="purpose">Pelayanan pemulasaraan jenazah.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>3</b>/3</div></div><div class="e2e-card plain"><h3>E2E-LAB — Laboratorium</h3><div class="purpose">Order, konfirmasi, pelaksanaan, dan hasil laboratorium.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>7</b>/11</div></div><div class="e2e-card plain"><h3>E2E-MASTER — Master Data dan Access Control</h3><div class="purpose">Siklus master data, konfigurasi, pengguna, role, dan akses.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>141</b>/247</div></div><div class="e2e-card plain"><h3>E2E-MCU — Medical Check Up</h3><div class="purpose">Pendaftaran dan paket pelayanan MCU.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>3</b>/4</div></div><div class="e2e-card plain"><h3>E2E-PA — Patologi Anatomi</h3><div class="purpose">Order, konfirmasi, dan hasil patologi anatomi.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>5</b>/15</div></div><div class="e2e-card plain"><h3>E2E-RAD — Radiologi</h3><div class="purpose">Pendaftaran, order, konfirmasi, dan hasil radiologi.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>14</b>/29</div></div><div class="e2e-card plain"><h3>E2E-REHAB — Rehabilitasi Medik</h3><div class="purpose">Penjadwalan, asesmen, dan pelayanan rehabilitasi medik.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>14</b>/15</div></div><div class="e2e-card plain"><h3>E2E-RI — Rawat Inap</h3><div class="purpose">Admisi, pelayanan, perpindahan, dan keluarnya pasien rawat inap.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>29</b>/61</div></div><a class="e2e-card" href="workspace-E2E-RJ.html"><h3>E2E-RJ — Rawat Jalan</h3><div class="purpose">Alur kunjungan dan pelayanan rawat jalan.</div><div class="stats">BUSINESS_CASES: <span class="badge b-green">RECONCILED</span> MAIN_FLOW: <span class="badge b-green">RECONCILED</span><br>Keputusan: <b>27</b> · Defect OPEN: <b>3</b> · Scanner OPEN: <b>0</b>/48</div></a><div class="e2e-card plain"><h3>E2E-SURAT — Administrasi Surat dan Consent</h3><div class="purpose">Pembuatan surat, persetujuan, penolakan, dan consent.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>7</b>/25</div></div><div class="e2e-card plain"><h3>E2E-TRANSFUSI — Transfusi Darah</h3><div class="purpose">Order, konfirmasi, crossmatch, dan pelayanan transfusi darah.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>6</b>/15</div></div><div class="e2e-card plain"><h3>E2E-VK — VK dan Kebidanan</h3><div class="purpose">Order tindakan dan pelayanan VK/kebidanan.</div><div class="stats"><span style="color:var(--mut)">belum ada sesi</span><br>Keputusan: <b>0</b> · Defect OPEN: <b>0</b> · Scanner OPEN: <b>3</b>/10</div></div></div>
+<footer>
+  Sumber: reconciliation/workspaces, canonical/automatic-reconciliation.json, canonical/manifest.json, e2e-inventory/domain-worklist.json
+  <br>Dibangkitkan oleh <span class="mono">neurovi-workspace-dashboard</span> pada 2026-08-22 08:52:15 UTC — regenerasi menimpa file ini sepenuhnya.
+</footer>
+</div>
+</body>
+</html>

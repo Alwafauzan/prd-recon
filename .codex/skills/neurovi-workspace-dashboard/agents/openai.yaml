@@ -1,0 +1,4 @@
+interface:
+  display_name: "Neurovi Workspace Dashboard"
+  short_description: "Generate HTML dashboard of reconciliation workspaces"
+  default_prompt: "Use $neurovi-workspace-dashboard to generate or refresh the self-contained HTML dashboard of reconciliation workspaces, overall and per E2E, while keeping the document repository read-only."
