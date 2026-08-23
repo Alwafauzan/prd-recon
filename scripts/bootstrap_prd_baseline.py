@@ -138,6 +138,30 @@ def markdown_link(label: str, target: str) -> str:
     return f"[{table_text(label)}](<{target}>)"
 
 
+FILENAME_MAX_TITLE = 72
+
+
+def canonical_prd_filename(document_code: str, title: str) -> str:
+    """On-disk filename for a canonical PRD: '<CODE> - <short title>.md'.
+
+    The code prefix keeps the stable primary key used across registers and
+    manifests; the short title keeps Obsidian graph nodes and file explorers
+    human-readable. Uniqueness is guaranteed by the code prefix.
+    """
+    short = re.sub(
+        r"^\s*(?:product requirement document \(prd\)|prd)\s*[-–—:]\s*",
+        "",
+        str(title),
+        flags=re.IGNORECASE,
+    )
+    short = re.sub(r'\s*[<>:"/\\|?*\x00-\x1f]\s*', " - ", short)
+    short = re.sub(r"\s*-\s*-\s*", " - ", short)
+    short = re.sub(r"\s+", " ", short).strip(" .-&,–—")
+    if len(short) > FILENAME_MAX_TITLE:
+        short = short[: FILENAME_MAX_TITLE + 1].rsplit(" ", 1)[0].strip(" .-&,–—")
+    return f"{document_code} - {short}.md" if short else f"{document_code}.md"
+
+
 def document_relation_rows(
     *,
     document_ids: set[str],
@@ -259,6 +283,7 @@ def render_document(
     mappings: list[dict[str, Any]],
     relations: list[dict[str, Any]],
     code_by_document_id: dict[str, str],
+    filename_by_code: dict[str, str],
 ) -> bytes:
     representations = document.get("source_representations", [])
     source_ids = [str(item.get("document_id", "")) for item in representations]
@@ -385,7 +410,7 @@ def render_document(
                 related_e2e = str(relation.get("source_domain_code", ""))
             related_code = code_by_document_id.get(related_id, "")
             related_prd_link = (
-                markdown_link(related_code, f"{related_code}.md")
+                markdown_link(related_code, filename_by_code.get(related_code, f"{related_code}.md"))
                 if related_code
                 else "-"
             )
@@ -455,6 +480,7 @@ def render_e2e_context(
     domain: dict[str, Any],
     relations: list[dict[str, Any]],
     code_by_document_id: dict[str, str],
+    filename_by_code: dict[str, str],
     inventory_sha256: str,
 ) -> bytes:
     e2e_code = str(domain.get("e2e_code", ""))
@@ -538,7 +564,11 @@ def render_e2e_context(
     for document in owner_documents:
         document_id = str(document.get("document_id", ""))
         document_code = code_by_document_id.get(document_id, "")
-        link = f"[{document_code}](../prds/{document_code}.md)" if document_code else "-"
+        link = (
+            markdown_link(document_code, f"../prds/{filename_by_code.get(document_code, f'{document_code}.md')}")
+            if document_code
+            else "-"
+        )
         assignment = "{} / {} / {}".format(
             str(document.get("assignment_status", "")) or "-",
             str(document.get("assignment_confidence", "")) or "-",
@@ -584,10 +614,10 @@ def render_e2e_context(
                     markdown_link(related_e2e, f"{related_e2e}.md")
                     if related_e2e
                     else "-",
-                    markdown_link(source_code, f"../prds/{source_code}.md")
+                    markdown_link(source_code, f"../prds/{filename_by_code.get(source_code, f'{source_code}.md')}")
                     if source_code
                     else "-",
-                    markdown_link(target_code, f"../prds/{target_code}.md")
+                    markdown_link(target_code, f"../prds/{filename_by_code.get(target_code, f'{target_code}.md')}")
                     if target_code
                     else "-",
                     table_text(str(relation.get("relationship_type", ""))),
@@ -796,6 +826,7 @@ def render_readme(
         "",
         "- Original files under `source/original/` remain immutable.",
         "- Each unique source payload receives one stable code using `PRD-<DOMAIN>-<NNN>`.",
+        "- On-disk canonical PRD files use `<CODE> - <short title>.md` so graph views and file explorers stay readable; the code remains the stable primary key.",
         "- Generated canonical documents use one metadata wrapper and append the complete selected original payload byte-for-byte.",
         "- The section map is mechanical navigation metadata, not a semantic completeness claim.",
         "- Version `v0.0.0` is a bootstrap baseline ready for reconciliation consumption; it is not an approved Git release or tag.",
@@ -869,6 +900,12 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
             document_id = str(representation.get("document_id", ""))
             if document_id:
                 code_by_document_id[document_id] = document_code
+    filename_by_code: dict[str, str] = {}
+    for _, document in inventory_rows:
+        document_code = registry[str(document.get("content_id", ""))]["document_code"]
+        filename_by_code[document_code] = canonical_prd_filename(
+            document_code, str(document.get("title", ""))
+        )
     manifest_documents: list[dict[str, Any]] = []
     expected_prd_outputs: set[Path] = set()
 
@@ -923,8 +960,9 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
             mappings=mappings,
             relations=relations,
             code_by_document_id=code_by_document_id,
+            filename_by_code=filename_by_code,
         )
-        output_relative = CANONICAL_ROOT / "prds" / f"{document_code}.md"
+        output_relative = CANONICAL_ROOT / "prds" / filename_by_code[document_code]
         output = repo / output_relative
         generated = header + raw
         write_if_changed(output, generated)
@@ -1054,6 +1092,7 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
             domain=domain,
             relations=relations,
             code_by_document_id=code_by_document_id,
+            filename_by_code=filename_by_code,
             inventory_sha256=inventory_sha256,
         )
         output_relative = CANONICAL_ROOT / "e2e" / f"{e2e_code}.md"
@@ -1295,7 +1334,9 @@ def validate(repo: Path) -> dict[str, Any]:
         if not item:
             continue
         relative_output = Path(str(item.get("path", "")))
-        expected_path = CANONICAL_ROOT / "prds" / f"{item.get('document_code', '')}.md"
+        expected_path = CANONICAL_ROOT / "prds" / canonical_prd_filename(
+            str(item.get("document_code", "")), str(item.get("original_title", ""))
+        )
         if relative_output != expected_path:
             errors.append(f"Unexpected generated path for {content_id}: {relative_output}")
             continue

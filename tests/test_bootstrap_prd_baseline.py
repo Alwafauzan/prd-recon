@@ -165,14 +165,14 @@ class CanonicalBootstrapTests(unittest.TestCase):
         self.assertEqual(manifest["canonical_version"], "v0.0.0")
         self.assertEqual(manifest["generator_version"], 2)
         self.assertEqual(manifest["artifact_type"], "CANONICAL_BASELINE_MANIFEST")
-        self.assertEqual(document["path"], "reconciliation/canonical/prds/PRD-RJ-001.md")
+        self.assertEqual(document["path"], "reconciliation/canonical/prds/PRD-RJ-001 - Original Title.md")
         self.assertEqual(document["payload_length"], len(self.raw))
         self.assertEqual(generated[document["payload_offset"] :], self.raw)
         self.assertEqual(manifest["generated_e2e_count"], 1)
         e2e = manifest["e2e_contexts"][0]
         self.assertEqual(e2e["path"], "reconciliation/canonical/e2e/E2E-RJ.md")
         e2e_text = (self.repo / e2e["path"]).read_text(encoding="utf-8")
-        self.assertIn("[PRD-RJ-001](../prds/PRD-RJ-001.md)", e2e_text)
+        self.assertIn("[PRD-RJ-001](<../prds/PRD-RJ-001 - Original Title.md>)", e2e_text)
         self.assertIn("not automatically a confirmed end-to-end sequence", e2e_text)
         self.assertIn("Automatic Source-Fact Reconciliation", e2e_text)
         self.assertIn("RESOLVED_BY_SOURCE_FACT", e2e_text)
@@ -215,9 +215,9 @@ class CanonicalBootstrapTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("## Verified Document Relationships", rawat_jalan)
-        self.assertIn("[PRD-RI-001](<PRD-RI-001.md>)", rawat_jalan)
+        self.assertIn("[PRD-RI-001](<PRD-RI-001 - Rawat Inap.md>)", rawat_jalan)
         self.assertIn("[E2E-RI](<../e2e/E2E-RI.md>)", rawat_jalan)
-        self.assertIn("[PRD-RJ-001](<PRD-RJ-001.md>)", rawat_inap)
+        self.assertIn("[PRD-RJ-001](<PRD-RJ-001 - Original Title.md>)", rawat_inap)
         self.assertIn("## Verified Cross-Domain Flow", e2e_rawat_jalan)
         self.assertIn("[E2E-RI](<E2E-RI.md>)", e2e_rawat_jalan)
         self.assertEqual(
@@ -248,7 +248,7 @@ class CanonicalBootstrapTests(unittest.TestCase):
             (self.repo / bootstrap.MANIFEST_PATH).read_text(encoding="utf-8")
         )
         rawat_jalan = (
-            self.repo / "reconciliation/canonical/prds/PRD-RJ-001.md"
+            self.repo / "reconciliation/canonical/prds/PRD-RJ-001 - Original Title.md"
         ).read_text(encoding="utf-8")
         e2e_rawat_jalan = (
             self.repo / "reconciliation/canonical/e2e/E2E-RJ.md"
