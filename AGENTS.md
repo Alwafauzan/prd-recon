@@ -7,6 +7,12 @@
 - Keep document baselines, reconciliation artifacts, and global document tags in the submodule repository.
 - Run `python3 scripts/build_structure.py validate --source neurovi-prd/source/original --target neurovi-prd` after regeneration.
 
+## Canonical Amendments
+
+- Canonical PRDs start byte-identical to their sources (`v0.0.0` bootstrap); later repository versions may change canonical meaning only through source-backed content or explicit `USER_CONFIRMED` decisions.
+- Apply user-confirmed decisions to canonical PRDs with `python3 scripts/apply_canonical_amendments.py --repo neurovi-prd` (amendment specs live in `neurovi-prd/reconciliation/amendments/`; each edit replaces an exact anchor and is marked `[DIPUTUSKAN: ...]` / `[Dikonfirmasi: ...]` / `[GAP TERBUKA: ...]`).
+- Amended documents carry a manifest `amendment` block; `bootstrap_prd_baseline.py validate` verifies them against the spec and `build` refuses to regenerate (destroy) them. Never hand-edit canonical PRDs outside this flow.
+
 ## Repository Skills
 
 - For a read-only audit report of domain groups, E2E domains, PRDs, gaps, and applied fixes, read and follow `.codex/skills/neurovi-audit-report/SKILL.md` completely.

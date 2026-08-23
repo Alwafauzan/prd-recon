@@ -16,8 +16,11 @@ style: |
   pre { background: #1e293b; border: 1px solid #334155; border-radius: 8px; }
   pre code { background: none; color: #e2e8f0; }
   table { font-size: 20px; }
-  th { background: #1e293b; color: #94a3b8; }
-  td, th { border-color: #334155; }
+  th { background: #cbd5e1; color: #0f172a; }
+  td { background: #f8fafc; color: #0f172a; }
+  td strong, th strong { color: #b45309; }
+  td code, th code { background: #e2e8f0; color: #0f172a; }
+  td, th { border-color: #94a3b8; }
   blockquote { border-left: 4px solid #06b6d4; color: #cbd5e1; background: #1e293b; padding: 8px 16px; }
   ul li, ol li { margin: 6px 0; }
   section.title h1 { font-size: 56px; }
@@ -125,7 +128,7 @@ Prinsip inti:
 | ├ Keputusan `USER_CONFIRMED` | **27** (`DEC-RJ-001` s.d. `DEC-RJ-027`) |
 | ├ Konflik A-vs-B diputus | 12 (di dokumen MERGED) |
 | ├ Register scanner E2E-RJ | 20 resolved · 28 excluded · **0 open** |
-| └ Baseline approval | `DEC-GLOBAL-001` + annotated tag **`v0.0.1`** |
+| └ Baseline approval | `DEC-GLOBAL-001` tag `v0.0.1` → `DEC-GLOBAL-002` tag **`v0.0.2`** (keputusan diterapkan in-place) |
 
 22 E2E lainnya terbawa utuh dari bootstrap `v0.0.0` — belum direkonsiliasi.
 
@@ -162,24 +165,54 @@ Semua 27 keputusan punya struktur lengkap yang sama → **dapat diaudit ulang pe
 
 # Canonical = base PRD untuk developer
 
-Yang berubah di release **v0.0.1** — **9 dari 209 PRD canonical** (semua E2E-RJ):
+**v0.0.2:** 27 keputusan kini **diterapkan langsung di titik konflik** — bukan lagi catatan di bawah dokumen.
 
-| Kelas perubahan | Dokumen | Artinya untuk developer |
-|---|---|---|
-| `FORMAL_CHANGE` (3) | PRD-RJ-005 (Pendaftaran MERGED), PRD-RJ-010 (Asesmen), PRD-RJ-012 (D5) | Ada keputusan yang **mengubah requirement** — baca bagian *Confirmed Decisions* |
-| `CONTEXT_ONLY` (4) | PRD-RJ-003, 007, 008, 011 | Keputusan hanya menetapkan **versi mana yang otoritatif** / konteks |
-| `NONE` (2) | PRD-RJ-001, 002 | Tidak berubah; defect-nya dicatat terbuka |
+| Sebelum (v0.0.1) | Sesudah (v0.0.2) |
+|---|---|
+| Keputusan = tabel metadata di bawah payload | Keputusan **menggantikan statement konflik** di body, bertanda `[DIPUTUSKAN: DEC-RJ-xxx]` |
+| Body masih menampilkan aturan lama yang kalah | Body menampilkan aturan final; yang belum diputus tetap ditandai `[GAP TERBUKA]` |
+| Dev menyimpulkan sendiri dari 2 section | Dev membaca **satu alur dokumen** — langsung requirement final |
 
 Cara kerja aman-nya:
 
-- **Payload sumber tetap byte-identical** — keputusan ditambahkan sebagai *appended section*, dokumen asli tidak disunting.
-- Developer membaca **satu file canonical** = isi sumber otoritatif + keputusan resmi + gap yang masih terbuka.
+- **Source asli tetap immutable** (SHA-256); payload lama utuh di tag `v0.0.1`. Setiap edit punya anchor before/after: `reconciliation/amendments/E2E-RJ.json` (**49 edit, 9 dokumen**).
+- Tools **menolak** me-regenerate dokumen ter-amend; `validate` memverifikasi tiap payload amended terhadap decision register — 209/209 hijau.
+
+---
+
+# Apa yang berubah di canonical — v0.0.1 (commit `fc9775b`)
+
+Di v0.0.1 semua perubahan masih **append-only** — payload sumber belum disunting (in-place baru di v0.0.2):
+
+| Area | Perubahan imbas rekonsiliasi |
+|---|---|
+| **9 PRD canonical (E2E-RJ)** | Section baru `## Reconciliation Decisions Applied` — tabel keputusan + gap terbuka, spesifik per dokumen |
+| **E2E-RJ.md (context)** | 3 relasi cross-domain di-redirect: PRD-RJ-008 (v2.1 usang) → PRD-RJ-007 (v2.4); section indeks keputusan baru |
+| **Register scanner** | Disposisi ulang global: resolved 218 → **231**; excluded 119 → **136**; gap terbuka menyusut (128→117 explicit, 273→254 insufficient-evidence) |
+| **manifest.json** | Checksum & payload offset resync untuk 9 dokumen ter-amend |
+| **File baru** | `releases/v0.0.1/` (changes.md + manifest) + artefak 2 sesi interview (interview/decision/defect register, review notes) |
+
+Rincian per dokumen: **Appendix D & E** (v0.0.1) dan **Appendix F** (v0.0.2 in-place).
+
+---
+
+# Before → after: satu titik konflik
+
+**v0.0.1 — keputusan hanya tercatat di tabel bawah; body tetap konflik:**
+
+> "**NIK pasien baru:** A mewajibkan NIK 16 digit; B mendukung Identitas Fleksibel — *apakah Identitas Fleksibel diadopsi?*" (Pertanyaan Terbuka)
+
+**v0.0.2 — body langsung memuat aturan final:**
+
+> `nik` · Kondisional · **Identitas Fleksibel:** pasien baru tanpa NIK (bayi baru lahir, WNA, tak dikenal) tetap dilayani & No. RM tetap terbit `[DIPUTUSKAN: DEC-RJ-011]`
+
+Dan section `Pertanyaan Terbuka` di PRD-RJ-005 kini berstatus jelas: **12 item → "Keputusan Final"** ber-decision-ID, sisanya tetap terbuka dengan label *jangan diimplementasikan tanpa keputusan*.
 
 ---
 
 # Contoh: PRD-RJ-005 setelah rekonsiliasi
 
-12 konflik "Pertanyaan Terbuka" di dokumen MERGED kini punya jawaban resmi:
+12 konflik "Pertanyaan Terbuka" di dokumen MERGED kini punya jawaban resmi — dan sejak v0.0.2 **tertulis langsung di body dokumen**:
 
 - Skrining gejala → **Batuk saja** (Strategi TEMPO)
 - Identitas pasien baru → **Identitas Fleksibel**
@@ -238,7 +271,7 @@ Target akhir inisiatif ini:
 | Aspek | Nilai | Catatan |
 |---|---|---|
 | **Metode** | ✅ Terbukti end-to-end | Pipeline jalan dari scan → interview → approval → tag, dalam 1 hari untuk 1 E2E |
-| **Kualitas** | ✅ Tinggi | 0 kandidat open di E2E-RJ; setiap keputusan ber-evidence; payload 209/209 byte-identical (termasuk perbaikan line-ending di baseline gate) |
+| **Kualitas** | ✅ Tinggi | 0 kandidat open di E2E-RJ; setiap keputusan ber-evidence; 209/209 canonical terverifikasi (200 byte-identical + 9 decision-applied per decision register) |
 | **Cakupan** | ⏳ **Baru 1/23 E2E** | Belum bisa klaim selesai — yang terbukti adalah metodenya |
 
 **Kesimpulan jujur:** hasil E2E-RJ memuaskan dan siap jadi base PRD developer untuk Rawat Jalan. Tapi ini bukti kelayakan (*pilot*), bukan garis finis.
@@ -258,7 +291,7 @@ Usulan prioritas berikutnya:
 2. **E2E-IGD** — volume kunjungan tinggi.
 3. Review terpisah: 5 relasi `REFERENCES` ke PRD-RJ-008 (`DEC-RJ-005`).
 
-Langkah administratif: **push** repo `neurovi-prd` (branch `preserve-prd-line-endings` ahead 1, tag `v0.0.1` belum di remote).
+Langkah administratif: **beres** — branch `preserve-prd-line-endings` + tag `v0.0.1` & `v0.0.2` semuanya sudah di remote.
 
 ---
 
@@ -266,8 +299,8 @@ Langkah administratif: **push** repo `neurovi-prd` (branch `preserve-prd-line-en
 
 - Masalah: PRD lintas versi tanpa jawaban resmi → **developer tidak punya base yang pasti**.
 - Solusi: pipeline rekonsiliasi **human-in-the-loop** dengan audit trail penuh; dokumen asli tidak pernah berubah.
-- Bukti: **E2E-RJ selesai dalam 1 hari** — 27 keputusan, 0 gap liar, release **v0.0.1** ter-approve & ter-tag.
-- Canonical v0.0.1 **siap jadi base PRD developer** untuk Rawat Jalan.
+- Bukti: **E2E-RJ selesai dalam 1 hari** — 27 keputusan, 0 gap liar; release **v0.0.2** ter-approve & ter-tag dengan keputusan **menyatu di body dokumen**.
+- Canonical v0.0.2 **siap jadi base PRD developer** untuk Rawat Jalan.
 - Jalan ke depan: replikasi proses ke 22 E2E sisanya (~4–5 minggu).
 
 # Terima kasih — Q&A
@@ -282,7 +315,7 @@ Langkah administratif: **push** repo `neurovi-prd` (branch `preserve-prd-line-en
 
 # Appendix A — Jaminan integritas sumber
 
-- Setiap PRD canonical = **payload byte-identical** dari `source/original/` (LF, SHA-256 tercatat di `manifest.json`) + wrapper + appended decision sections.
+- Setiap PRD canonical berawal sebagai **payload byte-identical** dari `source/original/` (LF, SHA-256 tercatat di `manifest.json`) + wrapper. Sejak **v0.0.2**, 9 dokumen E2E-RJ berstatus `DECISION_APPLIED`: payload-nya diamend persis per decision register (anchor before/after di `reconciliation/amendments/E2E-RJ.json`); 200 dokumen lain tetap byte-identical, dan original dari yang 9 tetap utuh di `source/original/` + tag `v0.0.1`.
 - Nama file canonical: `KODE - judul singkat.md` (mis. `PRD-RJ-005 - Pendaftaran Rawat Jalan (MERGED).md`) — kode tetap primary key; **kamus kode ↔ judul**: `reconciliation/canonical/index.md`.
 - Baseline gate menangkap & memperbaiki penyimpangan nyata: 9 PRD sempat ter-rewrite CRLF saat append → payload LF asli **di-re-embed**, verifikasi ulang **209/209 byte-identical**.
 - `build_structure.py validate` dijalankan sebelum & sesudah sesi: **643/643 source preservation intact** (satu-satunya temuan: file `PRD_MASTER_DATA_KAMAR.docx` ter-rename — pre-existing, tidak terkait sesi).
@@ -301,10 +334,70 @@ Langkah administratif: **push** repo `neurovi-prd` (branch `preserve-prd-line-en
 
 # Appendix C — Status git & administrasi
 
-- Branch kerja: `preserve-prd-line-endings` — HEAD `fc9775b` *"feat: baseline E2E-RJ reconciliation release v0.0.1"* (ahead 1 dari origin).
-- Annotated tag `v0.0.1` → merujuk `DEC-GLOBAL-001`.
-- Remote: `https://gitlab.localtamtech.com/prio27/neurovi-prd.git` — **push belum dilakukan** (menunggu konfirmasi).
-- Catatan changes.md: identitas author git di environment ini `fauzan@tamtech.id` — konfirmasi sebelum push.
+- Branch kerja: `preserve-prd-line-endings` — HEAD `1ba9a93` *"feat: apply E2E-RJ reconciliation decisions in place (v0.0.2)"* — **sudah di-push**, sinkron dengan remote.
+- Release commit v0.0.1: `fc9775b`; release commit v0.0.2: `1ba9a93`.
+- Annotated tag **`v0.0.1`** (→ `DEC-GLOBAL-001`) dan **`v0.0.2`** (→ `DEC-GLOBAL-002`) — **keduanya sudah di remote**.
+- Remote: `https://gitlab.localtamtech.com/prio27/neurovi-prd.git`.
+
+---
+
+# Appendix D — Perubahan canonical per dokumen, v0.0.1 (1/2)
+
+Section `## Reconciliation Decisions Applied` yang di-append ke tiap PRD (commit `fc9775b`, append-only):
+
+| Dokumen | Isi section yang ditambahkan |
+|---|---|
+| **PRD-RJ-001** (APM Check-in) | `DEF-RJ-001` — cetak barcode identitas APM: **DEFERRED** (boundary B8 vs B1 belum diputus) |
+| **PRD-RJ-002** (Antrean) | `DEF-RJ-BC-001` — status "Dilayani (tutup)" vs "Selesai": **KEEP_GAP_OPEN** |
+| **PRD-RJ-003** (General Consent) | `DEC-RJ-007` validasi No. Telepon: **min 3 karakter** · `DEC-RJ-015` typo sumber "Tanggal Lahir + Umur" **diperbaiki → Data Sosial** · `DEC-RJ-016` `ip_address` + `user_agent` **masuk skema audit trail** |
+| **PRD-RJ-005** (Pendaftaran MERGED) | **13 keputusan** (`DEC-RJ-001`, `010`–`014`, `020`–`026` — 12 konflik MERGED terjawab) + `DEF-RJ-001` & `DEF-RJ-002` tetap terbuka |
+| **PRD-RJ-007** (Dashboard v2.4) | `DEC-RJ-002` dikonfirmasi **acuan utama** Dashboard · `DEC-RJ-004` 3 relasi cross-domain **di-redirect ke dokumen ini** · `DEC-RJ-003` Status Pulang = **satu aksi terpadu** dengan form dokter |
+
+---
+
+# Appendix D — Perubahan canonical per dokumen, v0.0.1 (2/2)
+
+| Dokumen | Isi section yang ditambahkan |
+|---|---|
+| **PRD-RJ-008** (Dashboard v2.1) | `DEC-RJ-002` status **superseded / non-authoritative** (riwayat draft) · `DEC-RJ-004` 3 relasi dialihkan ke PRD-RJ-007 · `DEC-RJ-005` 5 relasi `REFERENCES` **sengaja TIDAK diubah** (scope dibatasi eksplisit) |
+| **PRD-RJ-010** (Asesmen RJ) | `DEC-RJ-003` Status Pulang satu aksi terpadu · `DEC-RJ-008` Hemodialisa/Rehab/Psikologi/Anestesi/Akupuntur = **unit penunjang, bukan poli** → sementara pakai form Asesmen General · `DEC-RJ-017` ambang Anak = **< 18 tahun** |
+| **PRD-RJ-011** (Konsul/Rujuk Internal) | `DEC-RJ-019` format salin Lab PK: **"Nama Parameter: Nilai" per baris** · catatan `CROSS_SOURCE_FACT`: aksi Salin **menambahkan**, bukan menimpa |
+| **PRD-RJ-012** (Ringkasan Pulang / D5) | `DEC-RJ-006` guard cetak BR-01 **tetap wajib dua asesmen** · `DEC-RJ-009` Petugas Pendaftaran hanya mencetak kunjungan **berstatus keluar terisi** · `DEC-RJ-018` TTV kosong tampil **"-"** · `DEF-RJ-002` trigger cetak di B1 tetap **OPEN** |
+
+---
+
+# Appendix E — Perubahan E2E context, register & manifest (v0.0.1)
+
+**`reconciliation/canonical/e2e/E2E-RJ.md`:**
+
+- 3 relasi cross-domain di-redirect `PRD-RJ-008` → `PRD-RJ-007`: HANDOFF_TO SPRI (`PRD-RI-002`), ENTRY_POINT_TO Transfer Internal (`PRD-RI-015`), ENTRY_POINT_TO Discharge (`PRD-RI-019`) — evidence ikut dikoreksi ke sumber v2.4 (`PRD Dashboard Pelayanan + INTEGRASI.md:170-171,206`).
+- Anotasi resmi per `DEC-RJ-002`/`DEC-RJ-004` + catatan pembatasan scope `DEC-RJ-005`.
+- Section baru **"Confirmed Reconciliation Decisions"**: indeks 2 sesi (MAIN_FLOW: 5 keputusan + 2 open; BUSINESS_CASES: 21 keputusan + 1 open).
+
+**Register scanner (`automatic-reconciliation.json/.md`):** resolved_by_source_fact 218→231 · open_source_explicit 128→117 · open_insufficient_evidence 273→254 · excluded_non_active_evidence 119→136.
+
+**`manifest.json`:** `register_sha256`/`report_sha256` resync; `payload_offset` +64 byte & `generated_sha256` baru untuk 9 dokumen ter-amend. Normalisasi line-ending CRLF→LF pada 9 file — payload tetap byte-identical (lihat Appendix A).
+
+**File baru:** `reconciliation/releases/v0.0.1/{changes.md, manifest.json}` + artefak sesi di `workspaces/E2E-RJ/sessions/{main-flow, business-cases}/` (interview-register.csv, decision-register.csv, defect-register.csv, review-session.md, session.json).
+
+---
+
+# Appendix F — Amendemen in-place v0.0.2 per dokumen
+
+49 edit ber-anchor persis (before/after: `reconciliation/amendments/E2E-RJ.json`):
+
+| Dokumen | Keputusan diterapkan di body |
+|---|---|
+| **PRD-RJ-005** (21+1 edit) | Skrining → **Batuk saja** (6 lokasi) · NIK → **Identitas Fleksibel** · piutang **info-only** · hapus registrasi **Kepala Pendaftaran** · pencarian **≤ 2 detik** · ICD-10 **wajib** · SATUSEHAT = **B1** · offline **terima-dulu-rekonsiliasi-kemudian** · biometrik **wajib di loket** · **≤ 3 klik / ≤ 30 detik** · No. RM **6 digit** · `Pertanyaan Terbuka` ditulis ulang (12 final, 4 tetap terbuka) |
+| **PRD-RJ-010** (8) | Status Pulang **auto-set dashboard** · 5 "poli" = **unit penunjang** → form General · Anak **< 18 tahun** |
+| **PRD-RJ-012** (6) | Guard cetak **tetap dua asesmen** · akses cetak **status keluar terisi** · TTV kosong **"-"** |
+| **PRD-RJ-003** (7) | No. telepon **min 3 karakter** · typo sumber **diperbaiki** · `ip_address`+`user_agent` **masuk audit trail** |
+| **PRD-RJ-007** (2) | Banner **acuan utama** · §9.3 integrasi Status Pulang |
+| **PRD-RJ-008** (1) | Banner **SUPERSEDED — jangan dijadikan sumber implementasi** |
+| **PRD-RJ-011** (1) | Format salin Lab PK **"Nama Parameter: Nilai"** |
+| **PRD-RJ-001 / 002** (1+1) | Penanda `[GAP TERBUKA]` di lokasi defect — tidak ada requirement berubah |
+
+**Tetap terbuka (sengaja tidak disentuh):** cakupan mock-vs-live · role ubah penjamin · batas B8/B1 · format No. SEP · pengecualian Skrining TB · ukuran kertas D5.
 
 ---
 

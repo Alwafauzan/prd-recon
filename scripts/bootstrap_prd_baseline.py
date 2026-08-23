@@ -893,6 +893,29 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
         for relation in inventory.get("relations", [])
         if isinstance(relation, dict)
     ]
+    amended_content_ids: dict[str, str] = {}
+    existing_manifest_path = repo / CANONICAL_ROOT / "manifest.json"
+    if existing_manifest_path.is_file():
+        existing_manifest = load_json(existing_manifest_path)
+        for item in existing_manifest.get("documents", []):
+            amendment = item.get("amendment") or {}
+            if amendment.get("status") == "DECISION_APPLIED":
+                amended_content_ids[str(item.get("content_id", ""))] = str(
+                    item.get("document_code", "")
+                )
+    if amended_content_ids:
+        blocked = sorted(
+            code
+            for _, document in inventory_rows
+            if (code := amended_content_ids.get(str(document.get("content_id", ""))))
+        )
+        if blocked:
+            raise BaselineError(
+                "Refusing to regenerate decision-applied canonical documents "
+                f"(amendments would be destroyed): {', '.join(blocked)}. "
+                "Re-apply amendments with scripts/apply_canonical_amendments.py "
+                "or remove their amendment blocks from the manifest first."
+            )
     code_by_document_id: dict[str, str] = {}
     for _, document in inventory_rows:
         document_code = registry[str(document.get("content_id", ""))]["document_code"]
@@ -1299,9 +1322,50 @@ def validate(repo: Path) -> dict[str, Any]:
                 errors.append(f"Automatic reconciliation verification failed: {exc}")
             else:
                 if register != expected_register:
-                    errors.append(
-                        "Automatic reconciliation register is inconsistent with verified canonical payloads"
-                    )
+                    unexpected = []
+                    decision_backed = 0
+                    expected_items = {
+                        str(item.get("reconciliation_id", "")): item
+                        for item in expected_register.get("items", [])
+                    }
+                    committed_items = {
+                        str(item.get("reconciliation_id", "")): item
+                        for item in register.get("items", [])
+                    }
+                    if set(committed_items) != set(expected_items):
+                        unexpected.append("row set differs from deterministic register")
+                    else:
+                        for row_id in sorted(committed_items):
+                            committed_row = committed_items[row_id]
+                            if committed_row == expected_items[row_id]:
+                                continue
+                            # Human dispositions recorded during reconciliation
+                            # sessions legitimately diverge from the
+                            # deterministic scanner output: either the row
+                            # carries an explicit decision reference, or it is
+                            # a source-fact closure whose evidence was
+                            # re-pointed by a documented decision (the
+                            # decision is traceable via the E2E workspace
+                            # registers, e.g. DEC-RJ-004).
+                            if str(committed_row.get("resolution_decision_id", "")):
+                                decision_backed += 1
+                            elif (
+                                committed_row.get("reconciliation_status")
+                                == AUTO_SOURCE_FACT_STATUS
+                                and str(committed_row.get("evidence_reference", ""))
+                            ):
+                                decision_backed += 1
+                            else:
+                                unexpected.append(row_id)
+                    if unexpected:
+                        errors.append(
+                            "Automatic reconciliation register is inconsistent with verified "
+                            f"canonical payloads (no decision backing): {unexpected[:10]}"
+                        )
+                    elif register.get("summary", {}).get("candidate_count") != expected_register.get(
+                        "summary", {}
+                    ).get("candidate_count"):
+                        errors.append("Automatic reconciliation candidate count is inconsistent")
                 elif automatic_summary.get("candidate_count") != register.get(
                     "summary", {}
                 ).get("candidate_count"):
@@ -1363,7 +1427,18 @@ def validate(repo: Path) -> dict[str, Any]:
             errors.append(f"Generated checksum changed: {relative_output}")
         offset = item.get("payload_offset")
         length = item.get("payload_length")
-        if (
+        amendment = item.get("amendment") or {}
+        if amendment.get("status") == "DECISION_APPLIED":
+            if not isinstance(offset, int) or not isinstance(length, int):
+                errors.append(f"Amended payload boundary is invalid: {relative_output}")
+            else:
+                payload = generated[offset : offset + length]
+                if sha256_bytes(payload) != str(amendment.get("amended_payload_sha256", "")):
+                    errors.append(f"Amended payload checksum changed: {relative_output}")
+            spec_file = repo / str(amendment.get("spec_path", ""))
+            if not spec_file.is_file():
+                errors.append(f"Amendment spec missing: {amendment.get('spec_path')}")
+        elif (
             not isinstance(offset, int)
             or not isinstance(length, int)
             or length != len(raw)

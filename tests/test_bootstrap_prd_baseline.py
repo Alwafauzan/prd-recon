@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import scripts.apply_canonical_amendments as amendments
 import scripts.bootstrap_prd_baseline as bootstrap
 
 
@@ -354,6 +355,169 @@ class CanonicalBootstrapTests(unittest.TestCase):
                 or "[ASUMSI]" in item.get("evidence_excerpt", "")
             )
         )
+
+
+class CanonicalAmendmentTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temporary.name)
+        source_dir = self.repo / "source/original/PRD/PRD Generator (.md)/Pelayanan (.md)"
+        source_dir.mkdir(parents=True)
+        (self.repo / "reconciliation/e2e-inventory").mkdir(parents=True)
+        (self.repo / "catalog").mkdir(parents=True)
+        (self.repo / "reconciliation/amendments").mkdir(parents=True)
+
+        self.source_relative = "PRD/PRD Generator (.md)/Pelayanan (.md)/source.md"
+        self.source = source_dir / "source.md"
+        self.raw = b"# Original Title\n\n## Scope\n\nLiteral source fact.\n"
+        self.source.write_bytes(self.raw)
+        sha = hashlib.sha256(self.raw).hexdigest()
+
+        inventory = {
+            "inventory_type": "E2E_DOMAIN_WORKLIST",
+            "inventory_version": "test",
+            "eligible_file_count": 1,
+            "unique_prd_count": 1,
+            "domain_count": 1,
+            "relations": [],
+            "domains": [
+                {
+                    "e2e_code": "E2E-RJ",
+                    "title": "Rawat Jalan",
+                    "documents": [
+                        {
+                            "worklist_order": 1,
+                            "worklist_stage": "ENTRY",
+                            "content_id": "CONTENT-001",
+                            "document_id": "DOC-001",
+                            "title": "Original Title",
+                            "source_path": self.source_relative,
+                            "source_representations": [
+                                {
+                                    "document_id": "DOC-001",
+                                    "source_path": self.source_relative,
+                                    "title": "Original Title",
+                                    "sha256": sha,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        catalog = {
+            "schema_version": 1,
+            "documents": [
+                {
+                    "document_id": "DOC-001",
+                    "content_id": "CONTENT-001",
+                    "source_path": self.source_relative,
+                    "title": "Original Title",
+                    "sha256": sha,
+                    "headings": [
+                        {"level": 1, "text": "Original Title", "line": 1},
+                        {"level": 2, "text": "Scope", "line": 3},
+                    ],
+                }
+            ],
+        }
+        (self.repo / bootstrap.INVENTORY_PATH).write_text(json.dumps(inventory), encoding="utf-8")
+        (self.repo / bootstrap.CATALOG_PATH).write_text(json.dumps(catalog), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _append_reconciliation_footer(self) -> Path:
+        manifest = json.loads((self.repo / bootstrap.MANIFEST_PATH).read_text(encoding="utf-8"))
+        document = manifest["documents"][0]
+        generated_path = self.repo / document["path"]
+        footer = (
+            "\n---\n\n## Reconciliation Decisions Applied (Session REC-TEST, main-flow)\n\n"
+            + amendments.FOOTER_DISCLAIMER_FIND
+            + "\n\n| Decision/Defect ID | Question / Gap | Resolution | Rationale |\n|---|---|---|---|\n"
+            + "| `DEC-TEST-001` | Test question? | **Decided.** | Test rationale. |\n"
+        )
+        generated_path.write_bytes(generated_path.read_bytes() + footer.encode("utf-8"))
+        return generated_path
+
+    def _write_spec(self) -> Path:
+        spec = {
+            "schema_version": 1,
+            "amendment_set_id": "AMD-TEST-001",
+            "e2e_code": "E2E-RJ",
+            "target_repository_version": "v0.0.2",
+            "documents": [
+                {
+                    "document_code": "PRD-RJ-001",
+                    "path": "reconciliation/canonical/prds/PRD-RJ-001 - Original Title.md",
+                    "decision_ids": ["DEC-TEST-001"],
+                    "edits": [
+                        {
+                            "edit_id": "AMD-TEST-01",
+                            "decision_id": "DEC-TEST-001",
+                            "section": "Scope",
+                            "find": "Literal source fact.",
+                            "replace": "Literal source fact. [DIPUTUSKAN: DEC-TEST-001 — decided]",
+                        }
+                    ],
+                }
+            ],
+        }
+        spec_path = self.repo / "reconciliation/amendments/E2E-RJ.json"
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        return spec_path
+
+    def test_apply_amendments_and_validate(self) -> None:
+        bootstrap.build(self.repo)
+        generated_path = self._append_reconciliation_footer()
+        spec_path = self._write_spec()
+
+        report = amendments.apply(self.repo, spec_path)
+        self.assertEqual(report["amendment_set_id"], "AMD-TEST-001")
+        self.assertEqual(report["documents"][0]["edits_applied"], 1)
+
+        text = generated_path.read_text(encoding="utf-8")
+        self.assertIn("[DIPUTUSKAN: DEC-TEST-001 — decided]", text)
+        self.assertIn("amendment_status=DECISION_APPLIED", text)
+        self.assertIn("`DECISION_APPLIED`", text)
+        self.assertIn("applied in place", text)
+
+        manifest = json.loads((self.repo / bootstrap.MANIFEST_PATH).read_text(encoding="utf-8"))
+        document = manifest["documents"][0]
+        amendment = document["amendment"]
+        self.assertEqual(amendment["status"], "DECISION_APPLIED")
+        self.assertEqual(amendment["decision_ids"], ["DEC-TEST-001"])
+        self.assertEqual(document["semantic_changes"], "DECISION_APPLIED")
+        payload = generated_path.read_bytes()[
+            document["payload_offset"] : document["payload_offset"] + document["payload_length"]
+        ]
+        self.assertEqual(
+            hashlib.sha256(payload).hexdigest(), amendment["amended_payload_sha256"]
+        )
+
+        result = bootstrap.validate(self.repo)
+        self.assertTrue(result["valid"], result["errors"])
+
+    def test_build_refuses_to_overwrite_amended_documents(self) -> None:
+        bootstrap.build(self.repo)
+        self._append_reconciliation_footer()
+        spec_path = self._write_spec()
+        amendments.apply(self.repo, spec_path)
+
+        with self.assertRaises(bootstrap.BaselineError) as ctx:
+            bootstrap.build(self.repo)
+        self.assertIn("Refusing to regenerate decision-applied", str(ctx.exception))
+
+    def test_apply_rejects_ambiguous_anchor(self) -> None:
+        bootstrap.build(self.repo)
+        self._append_reconciliation_footer()
+        spec_path = self._write_spec()
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        spec["documents"][0]["edits"][0]["find"] = "Anchor that does not exist"
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        with self.assertRaises(amendments.AmendmentError):
+            amendments.apply(self.repo, spec_path)
 
 
 if __name__ == "__main__":

@@ -496,16 +496,34 @@ def build_register(
         for membership in domain.get("documents", []):
             content_id = str(membership.get("content_id", ""))
             document = manifest_by_content[content_id]
-            canonical_path = repo / str(document["path"])
-            generated = canonical_path.read_bytes()
-            offset = int(document["payload_offset"])
-            length = int(document["payload_length"])
-            payload = generated[offset : offset + length]
-            if len(generated) != offset + length:
-                raise ValueError(
-                    f"Canonical payload boundary is invalid: {document['path']}"
-                )
-            content = payload.decode("utf-8")
+            amendment = document.get("amendment") or {}
+            if amendment.get("status") == "DECISION_APPLIED":
+                # Decision-applied canonical documents no longer embed the
+                # untouched source payload. Automatic source-fact scanning
+                # must read the verified original payload instead.
+                source_root = (repo / "source/original").resolve()
+                primary = (source_root / str(document["primary_source_path"])).resolve()
+                if source_root not in primary.parents:
+                    raise ValueError(
+                        f"Source path escapes source/original: {document['primary_source_path']}"
+                    )
+                raw = primary.read_bytes()
+                if hashlib.sha256(raw).hexdigest() != str(document["source_sha256"]):
+                    raise ValueError(
+                        f"Original checksum changed for amended document: {document['path']}"
+                    )
+                content = raw.decode("utf-8")
+            else:
+                canonical_path = repo / str(document["path"])
+                generated = canonical_path.read_bytes()
+                offset = int(document["payload_offset"])
+                length = int(document["payload_length"])
+                payload = generated[offset : offset + length]
+                if len(generated) != offset + length:
+                    raise ValueError(
+                        f"Canonical payload boundary is invalid: {document['path']}"
+                    )
+                content = payload.decode("utf-8")
             scanned_documents += 1
 
             for aspect, status in membership.get("flow_checks", {}).items():
