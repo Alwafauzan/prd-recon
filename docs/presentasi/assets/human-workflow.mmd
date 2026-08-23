@@ -1,0 +1,15 @@
+%%{init: {'theme':'dark', 'sequence': {'actorFontSize': 18, 'messageFontSize': 16, 'noteFontSize': 15}}}%%
+sequenceDiagram
+    autonumber
+    participant D as Pradev
+    participant A as Admin Rekonsiliasi
+    participant B as Penanggung Jawab<br/>Alur Bisnis
+    loop Setiap ada PRD baru / diupdate
+        D->>A: tambah / update source original
+        A->>A: validasi sumber + scan kandidat gap
+        A->>B: pertanyaan gap (netral + opsi + evidence)
+        B-->>A: jawaban / keputusan resmi
+        A->>A: terapkan keputusan ke canonical + audit
+        A->>B: dashboard untuk review bersama
+    end
+    Note over D,B: Siklus berulang — PRD boleh terus bertambah,<br/>rekonsiliasi tinggal jalan lagi, gap tinggal dijawab lagi

@@ -1,0 +1,15 @@
+%%{init: {'theme':'dark', 'flowchart': {'curve': 'basis'}}}%%
+flowchart LR
+    A["source/original<br/>PRD immutable"] --> B["build_structure<br/>validasi & struktur"]
+    B --> C["bootstrap baseline v0.0.0<br/>209 dok canonical + SHA-256"]
+    C --> D["e2e-inventory<br/>worklist 23 E2E"]
+    D --> E["gap-scanner<br/>738 kandidat mekanis"]
+    E --> F{"Disposisi satu per satu"}
+    F -->|"fakta literal terverifikasi"| G["RESOLVED_BY_SOURCE_FACT<br/>otomatis, tanpa keputusan"]
+    F -->|"representasi non-aktif"| H["EXCLUDED<br/>Versi A/B/v2.1 superseded"]
+    F -->|"butuh manusia"| I["prd-reconciler<br/>interview USER_CONFIRMED"]
+    I --> J["decision & defect register<br/>audit trail lengkap"]
+    G --> J
+    H --> J
+    J --> K["release v0.0.1<br/>BASELINE_APPROVAL + git tag"]
+    J -. "read-only" .-> L["dashboard HTML<br/>& audit report"]

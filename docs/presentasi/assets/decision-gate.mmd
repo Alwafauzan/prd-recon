@@ -1,0 +1,7 @@
+%%{init: {'theme':'dark', 'flowchart': {'curve': 'basis'}}}%%
+flowchart TD
+    S["Kandidat dari scanner<br/>mechanical review candidate"] --> Q["Pertanyaan netral + opsi + evidence"]
+    Q --> U{"Keputusan user"}
+    U -->|"pilih opsi"| D["DEC-xxx<br/>USER_CONFIRMED"]
+    U -->|"tunda dengan sadar"| O["KEEP_GAP_OPEN<br/>tetap terlihat di register"]
+    D --> C["canonical diperbarui<br/>+ decision section + evidence"]
