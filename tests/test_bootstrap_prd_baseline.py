@@ -195,6 +195,52 @@ class CanonicalBootstrapTests(unittest.TestCase):
         self.assertEqual(manifest_path.read_bytes(), manifest_bytes)
         self.assertEqual(generated_path.read_bytes(), generated)
 
+    def test_source_revision_keeps_existing_canonical_code(self) -> None:
+        self.assertTrue(bootstrap.build(self.repo)["valid"])
+
+        revised = b"# Original Title\n\n## Scope\n\nRevised literal source fact.\n"
+        revised_sha = hashlib.sha256(revised).hexdigest()
+        revised_content_id = "CONTENT-REVISED"
+        self.source.write_bytes(revised)
+
+        inventory_path = self.repo / bootstrap.INVENTORY_PATH
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        document = inventory["domains"][0]["documents"][0]
+        document["content_id"] = revised_content_id
+        document["source_representations"][0]["sha256"] = revised_sha
+        inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+        catalog_path = self.repo / bootstrap.CATALOG_PATH
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog_document = catalog["documents"][0]
+        catalog_document["content_id"] = revised_content_id
+        catalog_document["sha256"] = revised_sha
+        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+
+        self.assertTrue(bootstrap.build(self.repo)["valid"])
+        manifest = json.loads(
+            (self.repo / bootstrap.MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+        canonical = manifest["documents"][0]
+        self.assertEqual(canonical["document_code"], "PRD-RJ-001")
+        self.assertEqual(canonical["content_id"], revised_content_id)
+        self.assertEqual(
+            manifest["code_registry"],
+            [
+                {
+                    "content_id": revised_content_id,
+                    "document_code": "PRD-RJ-001",
+                    "assigned_e2e_code": "E2E-RJ",
+                    "active": True,
+                }
+            ],
+        )
+        generated = (self.repo / canonical["path"]).read_bytes()
+        self.assertEqual(generated[canonical["payload_offset"] :], revised)
+        self.assertFalse(
+            (self.repo / "reconciliation/canonical/prds/PRD-RJ-002.md").exists()
+        )
+
     def test_verified_cross_domain_relation_materializes_direct_graph_links(self) -> None:
         self.add_rawat_inap_document()
 

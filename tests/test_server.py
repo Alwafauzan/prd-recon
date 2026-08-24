@@ -211,6 +211,11 @@ class DomainWorklistInventoryTests(unittest.TestCase):
                 "ENTRY_POINT_TO",
             ),
             (
+                "PRD — Pendaftaran Rawat Jalan",
+                "PRD — Order Hemodialisa",
+                "ENTRY_POINT_TO",
+            ),
+            (
                 "Dashboard Pelayanan IGD",
                 "PRD — Order Pemeriksaan Laboratorium",
                 "ENTRY_POINT_TO",
@@ -237,6 +242,37 @@ class DomainWorklistInventoryTests(unittest.TestCase):
             ),
         }
         self.assertTrue(expected.issubset(active))
+
+    def test_hemodialysis_entry_points_use_current_source_context(self) -> None:
+        relations = [
+            row
+            for row in self.inventory["relations"]
+            if row["target_title"] == "PRD — Order Hemodialisa"
+            and row["relationship_type"] == "ENTRY_POINT_TO"
+            and row["evidence_class"] == "CROSS_SOURCE_FACT"
+        ]
+        self.assertEqual(
+            {row["source_title"] for row in relations},
+            {
+                "Dashboard Pelayanan IGD",
+                "PRD — Dashboard Pelayanan Rawat Inap Neurovi v2",
+                "PRD — Pendaftaran Rawat Jalan",
+            },
+        )
+        self.assertTrue(
+            all(
+                row["output_context"]
+                == "Order HD yang berhasil dibuat menyebabkan pasien masuk/tersedia pada Dashboard Pelayanan Hemodialisa."
+                for row in relations
+            )
+        )
+        self.assertTrue(
+            all("Menunggu Konfirmasi" not in row["output_context"] for row in relations)
+        )
+        self.assertEqual(
+            {row["evidence_reference"].rsplit(":", 1)[-1] for row in relations},
+            {"56", "57", "58"},
+        )
 
     def test_ambiguous_billing_and_registration_targets_remain_review_only(self) -> None:
         ambiguous_sources = {
@@ -1642,6 +1678,56 @@ class ReconciliationAgentTests(unittest.TestCase):
                     {
                         "capability": "reconcile.main-flow.start",
                         "parameters": {"e2e": "E2E-RJ"},
+                        "actor": {
+                            "discord_user_id": "123",
+                            "discord_role_ids": ["456"],
+                        },
+                    }
+                )
+
+            self.assertEqual(captured.exception.status_code, 409)
+            self.assertIn("pengguna lain", str(captured.exception))
+
+    def test_existing_session_rejects_updates_from_another_user(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            workspace = repo / "reconciliation/workspaces/E2E-RJ"
+            workspace.mkdir(parents=True)
+            (workspace / "session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "REC-E2E-RJ-001",
+                        "e2e_code": "E2E-RJ",
+                        "e2e_title": "Rawat Jalan",
+                        "status": "AWAITING_USER",
+                        "started_by": {"discord_user_id": "999"},
+                        "event_count": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                repo_root=repo,
+                tools_root=TOOLS_REPO,
+                discord_reconcile_role_ids=frozenset({456}),
+                llm_provider="9router",
+                llm_model="model-name",
+            )
+            agent = ReconciliationAgent.__new__(ReconciliationAgent)
+            agent.settings = settings
+            agent.store = SessionStore(repo, TOOLS_REPO)
+            agent.model_profile = {
+                "provider": "9router",
+                "model": "model-name",
+                "reasoning_effort": "high",
+            }
+
+            with self.assertRaises(ReconciliationAgentError) as captured:
+                agent.invoke(
+                    {
+                        "capability": "reconcile.status",
+                        "parameters": {"session_id": "REC-E2E-RJ-001"},
                         "actor": {
                             "discord_user_id": "123",
                             "discord_role_ids": ["456"],

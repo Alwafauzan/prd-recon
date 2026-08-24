@@ -1295,6 +1295,8 @@ class ReconciliationAgent:
             str(session["e2e_code"]),
             str(session.get("reconciliation_mode", "MAIN_FLOW")),
         ):
+            if capability != "reconcile.finish":
+                self._authorize_session_owner(session, actor)
             if capability == "reconcile.status":
                 return self._status(workspace, session)
             if capability == "reconcile.stop":
@@ -1957,6 +1959,7 @@ class ReconciliationAgent:
                 "reconciliation_mode": session.get("reconciliation_mode", "MAIN_FLOW"),
                 "model_profile": self.model_profile,
                 "event_count": session.get("event_count", 0),
+                "current_question": current if isinstance(current, Mapping) else None,
             },
         }
 
@@ -2052,6 +2055,11 @@ class ReconciliationAgent:
                 "reconciliation_mode": session.get(
                     "reconciliation_mode", "MAIN_FLOW"
                 ),
+                "current_question": (
+                    session.get("current_question")
+                    if isinstance(session.get("current_question"), Mapping)
+                    else None
+                ),
             },
         }
 
@@ -2070,6 +2078,22 @@ class ReconciliationAgent:
         if not allowed or not role_ids.intersection(allowed):
             raise ReconciliationAgentError(
                 "Actor is not authorized for this reconciliation capability.", 403
+            )
+
+    @staticmethod
+    def _authorize_session_owner(
+        session: Mapping[str, Any], actor: Mapping[str, Any]
+    ) -> None:
+        started_by = session.get("started_by", {})
+        owner = (
+            str(started_by.get("discord_user_id", ""))
+            if isinstance(started_by, Mapping)
+            else ""
+        )
+        requester = str(actor.get("discord_user_id", ""))
+        if owner and owner != requester:
+            raise ReconciliationAgentError(
+                "Proses ini sedang ditinjau oleh pengguna lain.", 409
             )
 
     def _load_system_prompt(self) -> str:

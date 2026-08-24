@@ -1,0 +1,24 @@
+FROM python:3.12-slim-bookworm
+
+ARG RUNTIME_UID=10003
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV NEUROVI_PRD_MCP_REPOSITORY=/repository
+
+WORKDIR /opt/neurovi
+
+COPY pyproject.toml README.md ./
+
+RUN python -m pip install --no-cache-dir "mcp==1.29.0" \
+    && useradd --uid "$RUNTIME_UID" --create-home \
+        --home-dir /home/mcp --shell /usr/sbin/nologin mcp
+
+COPY src ./src
+RUN python -m pip install --no-cache-dir --no-deps .
+
+USER 10003:10003
+WORKDIR /repository
+EXPOSE 8767
+
+CMD ["neurovi-prd-mcp", "serve"]

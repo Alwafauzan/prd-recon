@@ -1,0 +1,33 @@
+services:
+  prd-mcp:
+    container_name: neurovi-prd-mcp
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    restart: unless-stopped
+    env_file:
+      - "${NEUROVI_PRD_MCP_ENV_FILE:-/etc/neurovi-prd-mcp/server.env}"
+    network_mode: host
+    volumes:
+      - "${NEUROVI_PRD_MCP_REPOSITORY_ROOT:-./neurovi-prd}:/repository:ro"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, urllib.request;
+          urllib.request.urlopen(os.environ['NEUROVI_PRD_MCP_PUBLIC_URL'].replace('/mcp', '/healthz'), timeout=3).read()
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 10s

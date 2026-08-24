@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.4,<3"]
+mcp = ["mcp==1.29.0"]
 dev = []
 
 [project.scripts]
@@ -19,6 +20,7 @@ neurovi-doc-reconciliator = "neurovi_prd_server.cli:main"
 neurovi-prd = "neurovi_prd_server.cli:main"
 neurovi-discord = "neurovi_prd_server.discord_bot:main"
 neurovi-reconciliation-agent = "neurovi_prd_server.agent_server:main"
+neurovi-prd-mcp = "neurovi_prd_server.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

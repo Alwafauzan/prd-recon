@@ -208,10 +208,12 @@ def heading_map(headings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def load_registry(repo: Path) -> dict[str, dict[str, str]]:
+def load_registry(
+    repo: Path,
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
     path = repo / MANIFEST_PATH
     if not path.is_file():
-        return {}
+        return {}, {}
     manifest = load_json(path)
     registry: dict[str, dict[str, str]] = {}
     for item in manifest.get("code_registry", []):
@@ -226,12 +228,89 @@ def load_registry(repo: Path) -> dict[str, dict[str, str]]:
             "document_code": code,
             "assigned_e2e_code": assigned_e2e,
         }
-    return registry
+    identity_registry: dict[str, dict[str, str]] = {}
+    for item in manifest.get("documents", []):
+        assignment = {
+            "content_id": str(item.get("content_id", "")),
+            "document_code": str(item.get("document_code", "")),
+            "assigned_e2e_code": str(item.get("owner_e2e_code", "")),
+        }
+        if not all(assignment.values()):
+            raise BaselineError("Existing canonical document identity is incomplete.")
+        identities = {
+            f"document:{item.get('primary_source_document_id', '')}",
+            f"path:{item.get('primary_source_path', '')}",
+        }
+        for representation in item.get("source_representations", []):
+            identities.add(f"document:{representation.get('document_id', '')}")
+            identities.add(f"path:{representation.get('source_path', '')}")
+        for identity in identities:
+            if identity.endswith(":"):
+                continue
+            existing = identity_registry.get(identity)
+            if existing and existing["document_code"] != assignment["document_code"]:
+                raise BaselineError(
+                    f"Existing canonical identity maps to multiple codes: {identity}"
+                )
+            identity_registry[identity] = assignment
+    return registry, identity_registry
 
 
 def assign_codes(
-    inventory: dict[str, Any], registry: dict[str, dict[str, str]]
+    inventory: dict[str, Any],
+    registry: dict[str, dict[str, str]],
+    identity_registry: dict[str, dict[str, str]],
 ) -> dict[str, dict[str, str]]:
+    active_documents = [
+        (str(domain.get("e2e_code", "")), document)
+        for domain in inventory.get("domains", [])
+        for document in domain.get("documents", [])
+    ]
+    active_content_ids = {
+        str(document.get("content_id", "")) for _, document in active_documents
+    }
+
+    # A source revision changes content_id, but the canonical document code must
+    # remain stable for the same path/document identity.
+    for e2e_code, document in active_documents:
+        content_id = str(document.get("content_id", ""))
+        if not content_id or content_id in registry:
+            continue
+        identities = {
+            f"document:{document.get('document_id', '')}",
+            f"path:{document.get('source_path', '')}",
+        }
+        for representation in document.get("source_representations", []):
+            identities.add(f"document:{representation.get('document_id', '')}")
+            identities.add(f"path:{representation.get('source_path', '')}")
+        candidates = {
+            identity_registry[identity]["document_code"]
+            for identity in identities
+            if not identity.endswith(":") and identity in identity_registry
+        }
+        if len(candidates) > 1:
+            raise BaselineError(
+                f"Source identity maps to multiple canonical codes: {sorted(candidates)}"
+            )
+        if not candidates:
+            continue
+        code = next(iter(candidates))
+        previous_content_ids = [
+            existing_content_id
+            for existing_content_id, assignment in registry.items()
+            if assignment["document_code"] == code
+        ]
+        for previous_content_id in previous_content_ids:
+            if previous_content_id in active_content_ids:
+                raise BaselineError(
+                    f"Canonical code migration would replace active content: {code}"
+                )
+            del registry[previous_content_id]
+        registry[content_id] = {
+            "document_code": code,
+            "assigned_e2e_code": e2e_code,
+        }
+
     used_codes: dict[str, str] = {}
     next_number: dict[str, int] = {}
     for content_id, assignment in registry.items():
@@ -886,7 +965,8 @@ def build(repo: Path, prune: bool = False) -> dict[str, Any]:
     catalog_by_id = {
         str(item.get("document_id", "")): item for item in catalog.get("documents", [])
     }
-    registry = assign_codes(inventory, load_registry(repo))
+    registry, identity_registry = load_registry(repo)
+    registry = assign_codes(inventory, registry, identity_registry)
     inventory_rows = inventory_documents(inventory)
     relations = [
         dict(relation)

@@ -121,8 +121,11 @@ docker compose logs -f discord-bot reconciliation-agent
 ```
 
 Put the generated value in `NEUROVI_AGENT_GATEWAY_TOKEN`. Compose uses
-`http://reconciliation-agent:8080/invoke` as the internal gateway URL. The same
-token is mapped to the bot and the agent; it is not the 9router token.
+`http://reconciliation-agent:8080/invoke` as the internal Discord gateway URL
+and publishes the same agent on
+`127.0.0.1:${NEUROVI_AGENT_HOST_PORT:-8080}` for the optional host-networked MCP
+gateway. The loopback binding is not reachable from the LAN.
+The same token is mapped to the bot and the agent; it is not the 9router token.
 
 The image contains the Python adapters, deterministic scripts, and repository
 skills. The `discord-bot` service mounts `neurovi-prd/` read-only. Only the
